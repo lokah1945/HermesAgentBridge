@@ -1,0 +1,54 @@
+{
+  "name": "hermes-ilma",
+  "displayName": "Hermes Agent Bridge",
+  "description": "Hermes Coding Agent Platform Extension",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "hermes.startSession",
+        "title": "Hermes: Start Session"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "hermes-sidebar",
+          "title": "Hermes",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "hermes-sidebar": [
+        {
+          "type": "webview",
+          "id": "hermes.chatView",
+          "name": "Agent Chat"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x",
+    "typescript": "^5.1.3"
+  }
+}

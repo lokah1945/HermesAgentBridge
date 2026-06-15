@@ -1,0 +1,29 @@
+{
+  "profile": "ILMA",
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000,
+    "editable": true
+  },
+  "agent": {
+    "default_mode": "review",
+    "stream": true,
+    "session_ttl_minutes": 60
+  },
+  "auth": {
+    "enabled": false,
+    "strategy": "none",
+    "future_pluggable": true
+  },
+  "multiUser": {
+    "enabled": false,
+    "future_multitenant": true
+  },
+  "localMode": true,
+  "tools": {
+    "filesystem": true,
+    "terminal": true,
+    "git": true,
+    "search": true
+  }
+}
