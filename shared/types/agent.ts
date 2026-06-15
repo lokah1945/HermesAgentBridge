@@ -23,6 +23,7 @@ export interface Diff {
     before: string;
     after: string;
     file: string;
+    unified?: string;
 }
 
 export interface ExecutionResult {

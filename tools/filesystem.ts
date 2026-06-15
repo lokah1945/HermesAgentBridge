@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { createTwoFilesPatch } from 'diff';
 
 export function readFile(workspaceRoot: string, targetPath: string): { success: boolean; content?: string; error?: string } {
     try {
@@ -30,3 +31,19 @@ export function writeFile(workspaceRoot: string, targetPath: string, content: st
         return { success: false, error: e.message };
     }
 }
+
+export function generateDiff(
+  filePath: string,
+  before: string,      // konten sebelum ('' jika file baru)
+  after: string        // konten setelah
+): string {
+  return createTwoFilesPatch(
+    filePath,
+    filePath,
+    before,
+    after,
+    'before',
+    'after'
+  );
+}
+

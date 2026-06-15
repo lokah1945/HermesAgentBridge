@@ -10,31 +10,76 @@ import { searchWorkspace } from '../tools/search';
 import { createPlan } from '../runtime/planner';
 import { executeStep } from '../runtime/executor';
 import { chat, chatStream } from './adapter/llm';
+import { saveSession, getSession, deleteSession } from './session-store';
+import { requireFields } from './middleware/validate';
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Basic session storage in memory
-const sessions: Record<string, any> = {};
-
 // Active executions cache
 const activeExecutions: Record<string, {
     resolve: (action: 'approve' | 'reject') => void;
-    pendingResult?: any;
     pendingStep?: any;
 }> = {};
+
+// SSE connections map
+const sseConnections: Record<string, express.Response> = {};
+
+function sendSSE(sessionId: string, event: string, data: any) {
+    const res = sseConnections[sessionId];
+    if (res) {
+        res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    }
+}
+
+// GET /v1/session/:sessionId/stream
+app.get('/v1/session/:sessionId/stream', (req, res) => {
+    const { sessionId } = req.params;
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    sseConnections[sessionId] = res;
+    console.log(`[SSE] Client connected to session stream: ${sessionId}`);
+
+    // If session has a pending step when connecting, emit awaiting_approval immediately so client UI syncs
+    const session = getSession(sessionId);
+    if (session && session.pendingStep) {
+        // Delay slightly to let EventSource mount listeners
+        setTimeout(() => {
+            sendSSE(sessionId, 'awaiting_approval', { session_id: sessionId, step_id: session.pendingStep.stepId });
+        }, 500);
+    }
+
+    req.on('close', () => {
+        if (sseConnections[sessionId] === res) {
+            delete sseConnections[sessionId];
+        }
+        console.log(`[SSE] Client disconnected from session stream: ${sessionId}`);
+    });
+});
 
 // POST /v1/session/start
 app.post('/v1/session/start', (req, res) => {
     const sessionId = uuidv4();
-    sessions[sessionId] = { workspace: req.body.workspace, history: [], profile: req.body.profile || 'ILMA' };
+    const workspace = req.body.workspace || process.cwd();
+    const sessionData = {
+        id: sessionId,
+        workspace,
+        profile: req.body.profile || 'ILMA',
+        history: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+    };
+    saveSession(sessionId, sessionData);
     res.json({ session_id: sessionId });
 });
 
 // POST /v1/session/end
-app.post('/v1/session/end', (req, res) => {
-    delete sessions[req.body.session_id];
+app.post('/v1/session/end', requireFields('session_id'), (req, res) => {
+    deleteSession(req.body.session_id);
     res.json({ success: true });
 });
 
@@ -76,28 +121,22 @@ app.post('/v1/chat/completions', async (req, res) => {
             const content = await chat(messages);
             res.json({ choices: [{ message: { role: 'assistant', content } }] });
         } catch (err: any) {
-            res.status(500).json({ error: err.message });
+            const status = err.message.includes('LLM_UNAVAILABLE') ? 503 : 500;
+            res.status(status).json({ 
+                error: err.message,
+                hint: err.message.includes('LLM_UNAVAILABLE') ? "Jalankan: ollama serve" : undefined 
+            });
         }
     }
 });
 
-// POST /v1/agent/run (SSE)
-app.post('/v1/agent/run', async (req, res) => {
-    const { session_id, task, workspace, mode } = req.body;
-    
-    if (!session_id || !task || !workspace || !workspace.root) {
-        res.status(400).json({ error: "Missing required fields (session_id, task, workspace.root)" });
+async function runAgentLoop(sessionId: string) {
+    const session = getSession(sessionId);
+    if (!session || !session.plan || session.currentStepIndex === undefined) {
         return;
     }
 
-    const workspaceRoot = workspace.root;
-
-    // Set up SSE headers
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-
-    // Build context
+    const workspaceRoot = session.workspace?.root || session.workspace || process.cwd();
     const gitStatusRes = await gitStatus(workspaceRoot);
     const context = {
         root: workspaceRoot,
@@ -107,110 +146,184 @@ app.post('/v1/agent/run', async (req, res) => {
         git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
     };
 
-    // Initialize session history if not present
-    if (!sessions[session_id]) {
-        sessions[session_id] = { workspace, history: [], profile: 'ILMA' };
-    }
-    const history = sessions[session_id].history || [];
+    const steps = session.plan.steps;
+    const modifiedFiles: string[] = [];
 
-    try {
-        // Create plan
-        const plan = await createPlan(task, context, session_id);
+    for (let i = session.currentStepIndex; i < steps.length; i++) {
+        const currentSession = getSession(sessionId);
+        if (!currentSession) break;
+        currentSession.currentStepIndex = i;
+        saveSession(sessionId, currentSession);
+
+        const step = steps[i];
         
-        // Stream plan event
-        res.write(`event: plan\ndata: ${JSON.stringify(plan)}\n\n`);
-
-        const modifiedFiles: string[] = [];
-
-        // For each step in the plan
-        for (const step of plan.steps) {
-            const isAuto = step.mode === 'auto' || mode === 'auto';
+        try {
+            // Check if auto mode
+            const isAuto = step.mode === 'auto' || currentSession.mode === 'auto';
 
             if (isAuto) {
-                // Execute directly
-                const result = await executeStep(step, context, history);
+                const result = await executeStep(step, context, currentSession.history);
                 if (result.status === 'success') {
                     if (step.action === 'write_file' && result.diff) {
                         modifiedFiles.push(result.diff.file);
                     }
-                    res.write(`event: result\ndata: ${JSON.stringify(result)}\n\n`);
-                    history.push({ role: 'user', content: `Executed step ${step.id}: ${step.description}` });
-                    history.push({ role: 'assistant', content: result.output || "Success" });
+                    sendSSE(sessionId, 'result', result);
+                    currentSession.history.push({ role: 'user', content: `Executed step ${step.id}: ${step.description}` });
+                    currentSession.history.push({ role: 'assistant', content: result.output || "Success" });
+                    saveSession(sessionId, currentSession);
                 } else {
-                    res.write(`event: error\ndata: ${JSON.stringify({ error: result.error || "Step execution failed" })}\n\n`);
-                    res.end();
+                    sendSSE(sessionId, 'error', { error: result.error || "Step execution failed" });
                     return;
                 }
             } else {
-                // Review mode: generate diff (or draft) and await approval
-                const result = await executeStep(step, context, history);
-                
+                // Review mode
+                const result = await executeStep(step, context, currentSession.history);
                 if (result.status === 'error') {
-                    res.write(`event: error\ndata: ${JSON.stringify({ error: result.error || "Step preparation failed" })}\n\n`);
-                    res.end();
+                    sendSSE(sessionId, 'error', { error: result.error || "Step preparation failed" });
                     return;
                 }
 
-                // Stream diff event: SSE { event: "diff", data: { step, before: result.diff.before, after: result.diff.after } }
                 if (step.action === 'write_file' && result.diff) {
-                    res.write(`event: diff\ndata: ${JSON.stringify({ step, before: result.diff.before, after: result.diff.after })}\n\n`);
+                    sendSSE(sessionId, 'diff', {
+                        stepId: step.id,
+                        file: step.target,
+                        unified: result.diff.unified || ""
+                    });
+                    currentSession.pendingStep = {
+                        stepId: step.id,
+                        action: step.action,
+                        target: step.target,
+                        after: result.diff.after
+                    };
+                    saveSession(sessionId, currentSession);
                 } else if (step.action === 'run_command') {
-                    res.write(`event: diff\ndata: ${JSON.stringify({ step, command: step.target })}\n\n`);
+                    sendSSE(sessionId, 'diff', {
+                        stepId: step.id,
+                        file: step.target,
+                        unified: `Command to execute: ${step.target}`
+                    });
+                    currentSession.pendingStep = {
+                        stepId: step.id,
+                        action: step.action,
+                        target: step.target,
+                        after: ''
+                    };
+                    saveSession(sessionId, currentSession);
                 }
 
-                // Stream awaiting_approval event
-                res.write(`event: awaiting_approval\ndata: ${JSON.stringify({ session_id, step_id: step.id })}\n\n`);
+                sendSSE(sessionId, 'awaiting_approval', { session_id: sessionId, step_id: step.id });
 
-                // PAUSE: Wait for approval or rejection
                 const approvalPromise = new Promise<'approve' | 'reject'>((resolve) => {
-                    activeExecutions[session_id] = {
+                    activeExecutions[sessionId] = {
                         resolve,
-                        pendingResult: result,
                         pendingStep: step
                     };
                 });
 
                 const action = await approvalPromise;
-                delete activeExecutions[session_id];
+                delete activeExecutions[sessionId];
+
+                const updatedSession = getSession(sessionId);
+                if (!updatedSession) return;
 
                 if (action === 'approve') {
                     if (step.action === 'write_file' && result.diff) {
                         const writeRes = writeFile(workspaceRoot, step.target, result.diff.after);
                         if (writeRes.success) {
                             modifiedFiles.push(result.diff.file);
-                            res.write(`event: result\ndata: ${JSON.stringify({ stepId: step.id, status: 'success', output: 'File written successfully' })}\n\n`);
+                            sendSSE(sessionId, 'applied', { file: step.target, stepId: step.id });
                         } else {
-                            res.write(`event: error\ndata: ${JSON.stringify({ error: writeRes.error || "Failed to write file" })}\n\n`);
-                            res.end();
+                            sendSSE(sessionId, 'error', { error: writeRes.error || "Failed to write file" });
                             return;
                         }
                     } else if (step.action === 'run_command') {
                         const execResult = await executeCommand(workspaceRoot, step.target);
                         if (execResult.success) {
-                            res.write(`event: result\ndata: ${JSON.stringify({ stepId: step.id, status: 'success', output: execResult.output })}\n\n`);
+                            sendSSE(sessionId, 'result', { stepId: step.id, status: 'success', output: execResult.output });
                         } else {
-                            res.write(`event: error\ndata: ${JSON.stringify({ error: execResult.output || "Failed to execute command" })}\n\n`);
-                            res.end();
+                            sendSSE(sessionId, 'error', { error: execResult.output || "Failed to execute command" });
                             return;
                         }
                     } else {
-                        res.write(`event: result\ndata: ${JSON.stringify(result)}\n\n`);
+                        sendSSE(sessionId, 'result', result);
                     }
-                    history.push({ role: 'user', content: `Executed step ${step.id}: ${step.description}` });
-                    history.push({ role: 'assistant', content: result.output || "Success" });
+                    updatedSession.pendingStep = undefined;
+                    updatedSession.history.push({ role: 'user', content: `Executed step ${step.id}: ${step.description}` });
+                    updatedSession.history.push({ role: 'assistant', content: result.output || "Success" });
+                    saveSession(sessionId, updatedSession);
                 } else {
-                    res.write(`event: result\ndata: ${JSON.stringify({ stepId: step.id, status: 'error', error: 'User rejected step' })}\n\n`);
+                    updatedSession.pendingStep = undefined;
+                    saveSession(sessionId, updatedSession);
+                    sendSSE(sessionId, 'rejected', { stepId: step.id });
                 }
             }
+        } catch (e: any) {
+            console.error(`[Agent Loop Error] sessionId: ${sessionId}`, e);
+            sendSSE(sessionId, 'error', { error: e.message || "Failed during step execution" });
+            return;
         }
+    }
 
-        // Stream done event
-        res.write(`event: done\ndata: ${JSON.stringify({ summary: "Task completed", files_modified: modifiedFiles })}\n\n`);
-        res.end();
+    const finalSession = getSession(sessionId);
+    if (finalSession) {
+        finalSession.currentStepIndex = steps.length;
+        saveSession(sessionId, finalSession);
+    }
+    sendSSE(sessionId, 'done', { summary: "Task completed", files_modified: modifiedFiles });
+}
 
+// POST /v1/agent/run
+app.post('/v1/agent/run', requireFields('session_id', 'task', 'workspace'), async (req, res) => {
+    const { session_id, task, workspace, mode } = req.body;
+    const workspaceRoot = workspace.root;
+
+    let session = getSession(session_id);
+    if (!session) {
+        session = {
+            id: session_id,
+            workspace,
+            profile: 'ILMA',
+            history: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+    } else {
+        session.workspace = workspace;
+    }
+    session.mode = mode || 'review';
+    saveSession(session_id, session);
+
+    const gitStatusRes = await gitStatus(workspaceRoot);
+    const context = {
+        root: workspaceRoot,
+        files: [],
+        symbols: [],
+        dependencies: { imports: [], exports: [] },
+        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
+    };
+
+    try {
+        const plan = await createPlan(task, context, session_id);
+        
+        session.plan = plan;
+        session.currentStepIndex = 0;
+        session.pendingStep = undefined;
+        saveSession(session_id, session);
+
+        sendSSE(session_id, 'plan', plan);
+
+        // Run agent in background
+        runAgentLoop(session_id);
+
+        res.json({ success: true, message: "Agent started" });
     } catch (e: any) {
-        res.write(`event: error\ndata: ${JSON.stringify({ error: e.message || "Failed to create or run plan" })}\n\n`);
-        res.end();
+        console.error(`[Agent Run Route Error] sessionId: ${session_id}`, e);
+        sendSSE(session_id, 'error', { error: e.message || "Failed to create plan" });
+        const status = e.message.includes('LLM_UNAVAILABLE') ? 503 : 500;
+        res.status(status).json({ 
+            error: e.message || "Failed to create plan",
+            hint: e.message.includes('LLM_UNAVAILABLE') ? "Jalankan: ollama serve" : undefined
+        });
     }
 });
 
@@ -222,7 +335,25 @@ app.post('/v1/agent/approve/:sessionId/:stepId', (req, res) => {
         execution.resolve('approve');
         res.json({ success: true });
     } else {
-        res.status(400).json({ error: `No active review step found for session ${sessionId} and step ${stepId}` });
+        const session = getSession(sessionId);
+        if (session && session.pendingStep && session.pendingStep.stepId === stepId) {
+            const { target, after } = session.pendingStep;
+            const workspaceRoot = session.workspace?.root || session.workspace || process.cwd();
+            const writeRes = writeFile(workspaceRoot, target, after);
+            if (writeRes.success) {
+                session.pendingStep = undefined;
+                session.currentStepIndex = (session.currentStepIndex ?? 0) + 1;
+                saveSession(sessionId, session);
+                
+                sendSSE(sessionId, 'applied', { file: target, stepId });
+                runAgentLoop(sessionId);
+                res.json({ success: true });
+            } else {
+                res.status(500).json({ error: writeRes.error || "Failed to write file" });
+            }
+        } else {
+            res.status(400).json({ error: `No active review step found for session ${sessionId} and step ${stepId}` });
+        }
     }
 });
 
@@ -234,12 +365,23 @@ app.post('/v1/agent/reject/:sessionId/:stepId', (req, res) => {
         execution.resolve('reject');
         res.json({ success: true });
     } else {
-        res.status(400).json({ error: `No active review step found for session ${sessionId} and step ${stepId}` });
+        const session = getSession(sessionId);
+        if (session && session.pendingStep && session.pendingStep.stepId === stepId) {
+            session.pendingStep = undefined;
+            session.currentStepIndex = (session.currentStepIndex ?? 0) + 1;
+            saveSession(sessionId, session);
+            
+            sendSSE(sessionId, 'rejected', { stepId });
+            runAgentLoop(sessionId);
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ error: `No active review step found for session ${sessionId} and step ${stepId}` });
+        }
     }
 });
 
 // POST /v1/files/read
-app.post('/v1/files/read', (req, res) => {
+app.post('/v1/files/read', requireFields('path', 'workspace'), (req, res) => {
     const { path: targetPath, workspace } = req.body;
     const result = readFile(workspace, targetPath);
     if (result.success) {
@@ -250,7 +392,7 @@ app.post('/v1/files/read', (req, res) => {
 });
 
 // POST /v1/files/write
-app.post('/v1/files/write', (req, res) => {
+app.post('/v1/files/write', requireFields('path', 'content', 'workspace'), (req, res) => {
     const { path: targetPath, content, workspace, diff_preview } = req.body;
     
     if (diff_preview) {
@@ -269,11 +411,16 @@ app.post('/v1/files/write', (req, res) => {
 });
 
 // POST /v1/tools/execute
-app.post('/v1/tools/execute', async (req, res) => {
+app.post('/v1/tools/execute', requireFields('tool', 'session_id'), async (req, res) => {
     const { tool, action, params, session_id } = req.body;
-    const workspace = sessions[session_id]?.workspace || process.cwd();
+    const session = getSession(session_id);
+    const workspace = session?.workspace?.root || session?.workspace || process.cwd();
     
     if (tool === 'terminal') {
+        if (!params || !params.command) {
+            res.status(400).json({ error: "Missing parameter 'command'" });
+            return;
+        }
         const result = await executeCommand(workspace, params.command);
         res.json(result);
     } else if (tool === 'git') {
@@ -281,12 +428,20 @@ app.post('/v1/tools/execute', async (req, res) => {
             const result = await gitStatus(workspace);
             res.json(result);
         } else if (action === 'commit') {
+            if (!params || !params.message) {
+                res.status(400).json({ error: "Missing parameter 'message'" });
+                return;
+            }
             const result = await gitCommit(workspace, params.message);
             res.json(result);
         } else {
             res.status(400).json({ error: 'Git action not supported' });
         }
     } else if (tool === 'search') {
+        if (!params || !params.query) {
+            res.status(400).json({ error: "Missing parameter 'query'" });
+            return;
+        }
         const result = await searchWorkspace(workspace, params.query);
         res.json(result);
     } else {
@@ -295,14 +450,15 @@ app.post('/v1/tools/execute', async (req, res) => {
 });
 
 // POST /v1/workspace/context
-app.post('/v1/workspace/context', async (req, res) => {
+app.post('/v1/workspace/context', (req, res) => {
     const workspace = req.body.workspace || process.cwd();
-    const gitStatusRes = await gitStatus(workspace);
-    res.json({
-        files: [],
-        symbols: [],
-        dependencies: { imports: [], exports: [] },
-        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
+    gitStatus(workspace).then(gitStatusRes => {
+        res.json({
+            files: [],
+            symbols: [],
+            dependencies: { imports: [], exports: [] },
+            git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
+        });
     });
 });
 
@@ -311,10 +467,16 @@ app.post('/v1/responses', (req, res) => {
     res.json({ success: true });
 });
 
-// Load config and start server
-const configPath = path.join(__dirname, '../config/hermes.config.json');
+// Load config
+const configPath = fs.existsSync(path.join(process.cwd(), 'config', 'hermes.config.json'))
+    ? path.join(process.cwd(), 'config', 'hermes.config.json')
+    : path.join(__dirname, '../config/hermes.config.json');
+
 let host = '0.0.0.0';
 let port = 3000;
+let profile = 'ILMA';
+let llmModel = 'llama3.2';
+let llmBaseUrl = 'http://localhost:11434/v1';
 
 try {
     if (fs.existsSync(configPath)) {
@@ -323,11 +485,52 @@ try {
             host = config.server.host || host;
             port = config.server.port || port;
         }
+        if (config.profile) {
+            profile = config.profile;
+        }
+        if (config.llm) {
+            llmModel = config.llm.model || llmModel;
+            llmBaseUrl = config.llm.baseUrl || llmBaseUrl;
+        }
     }
 } catch (e) {
     console.error("Failed to load config:", e);
 }
 
-app.listen(port, host, () => {
-    console.log(`Hermes Server running at http://${host}:${port}`);
+// GET /health
+app.get('/health', async (req, res) => {
+  const status: any = {
+    server: 'ok',
+    version: '1.0.0',
+    profile: profile,
+    uptime: Math.floor(process.uptime()),
+    llm: { status: 'unknown', model: llmModel, baseUrl: llmBaseUrl }
+  };
+
+  try {
+    const r = await fetch(`${llmBaseUrl.replace('/v1','')}/api/tags`);
+    status.llm.status = r.ok ? 'ok' : 'degraded';
+  } catch {
+    status.llm.status = 'unavailable';
+  }
+
+  const httpStatus = status.llm.status === 'ok' ? 200 : 207;
+  res.status(httpStatus).json(status);
 });
+
+const server = app.listen(port, host, () => {
+    console.log(`[Hermes] ● Server running at http://${host}:${port}`);
+    console.log(`[Hermes] Profile: ${profile} | LLM: ${llmModel}`);
+});
+
+const shutdown = (signal: string) => {
+  console.log(`\n[Hermes] ${signal} received — shutting down gracefully...`);
+  server.close(() => {
+    console.log('[Hermes] Server stopped.');
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(1), 5000);
+};
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));

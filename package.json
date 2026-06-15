@@ -4,7 +4,12 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon --exec ts-node server/index.ts",
+    "build": "tsc --outDir dist --rootDir . --declaration false",
+    "start": "node dist/server/index.js",
+    "start:dev": "npm run dev",
+    "start:prod": "npm run build && npm run start",
+    "health": "curl -s http://localhost:3000/health | cat"
   },
   "keywords": [],
   "author": "",
@@ -12,12 +17,14 @@
   "type": "commonjs",
   "dependencies": {
     "cors": "^2.8.6",
+    "diff": "^9.0.0",
     "express": "^5.2.1",
     "openai": "^6.42.0",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
+    "@types/diff": "^7.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^25.9.3",
     "@types/uuid": "^10.0.0",

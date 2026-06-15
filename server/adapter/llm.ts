@@ -2,7 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 
-const configPath = path.join(__dirname, '../../config/hermes.config.json');
+const configPath = fs.existsSync(path.join(process.cwd(), 'config', 'hermes.config.json'))
+    ? path.join(process.cwd(), 'config', 'hermes.config.json')
+    : path.join(__dirname, '../../config/hermes.config.json');
 let llmConfig = {
     baseUrl: "http://localhost:11434/v1",
     apiKey: "ollama",
@@ -49,9 +51,15 @@ export async function chat(messages: LLMMessage[]): Promise<string> {
         const responseContent = completion.choices[0]?.message?.content || "";
         console.log(`[LLM Chat] Model: ${llmConfig.model} | Completion successful`);
         return responseContent;
-    } catch (error: any) {
-        console.error("[LLM Chat Error]", error);
-        throw error;
+    } catch (err: any) {
+        console.error("[LLM Chat Error]", err);
+        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED') {
+            throw new Error('LLM_UNAVAILABLE: Ollama tidak berjalan di ' + llmConfig.baseUrl);
+        }
+        if (err.status === 404) {
+            throw new Error('LLM_MODEL_NOT_FOUND: Model ' + llmConfig.model + ' belum di-pull di Ollama');
+        }
+        throw new Error('LLM_ERROR: ' + err.message);
     }
 }
 
@@ -71,8 +79,16 @@ export async function chatStream(options: LLMStreamOptions): Promise<void> {
         }
         console.log(`[LLM ChatStream] Model: ${llmConfig.model} | Stream completed`);
         options.onDone();
-    } catch (error: any) {
-        console.error("[LLM ChatStream Error]", error);
-        options.onError(error);
+    } catch (err: any) {
+        console.error("[LLM ChatStream Error]", err);
+        let errorToReport = err;
+        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED') {
+            errorToReport = new Error('LLM_UNAVAILABLE: Ollama tidak berjalan di ' + llmConfig.baseUrl);
+        } else if (err.status === 404) {
+            errorToReport = new Error('LLM_MODEL_NOT_FOUND: Model ' + llmConfig.model + ' belum di-pull di Ollama');
+        } else {
+            errorToReport = new Error('LLM_ERROR: ' + err.message);
+        }
+        options.onError(errorToReport);
     }
 }

@@ -1,56 +1,100 @@
-# INSTALL GUIDE
+# Hermes Agent Bridge — Installation & Setup Guide
 
-## Prerequisites
-- Node.js (v18 atau lebih baru)
-- NPM (Node Package Manager)
-- Visual Studio Code (v1.80.0 atau lebih baru)
+Hermes Agent Bridge adalah framework jembatan agen AI lokal (berbasis Ollama) yang terintegrasi langsung dengan ekstensi VSCode Sidebar untuk membantu penulisan kode, visualisasi unified diff, review step, dan eksekusi command terotomatisasi.
 
-## Server Installation
-1. Buka terminal di root folder `hermes`.
-2. Install dependency menggunakan NPM:
+---
+
+## 📋 Prasyarat Sistem
+1. **Node.js**: Versi 18 ke atas.
+2. **Ollama**: Terinstal dan berjalan secara lokal (default port: `11434`).
+3. **Model Llama**: Pastikan model `llama3.2` sudah di-pull.
    ```bash
-   npm install
-   ```
-3. Sesuaikan konfigurasi server di file `config/hermes.config.json` bila perlu (secara default diset untuk mendengarkan `0.0.0.0:3000`).
-4. Jalankan Hermes Server:
-   ```bash
-   npm run start
-   # atau
-   npx ts-node server/index.ts
+   ollama pull llama3.2
    ```
 
-## Extension Installation
-1. Navigasikan ke sub-folder ekstensi:
-   ```bash
-   cd extensions/vscode
-   ```
-2. Jalankan kompilasi dan paketing ekstensi (pastikan modul `@vscode/vsce` sudah terinstall):
-   ```bash
-   npm install
-   npm run package
-   ```
-3. File `.vsix` (seperti `hermes-ilma-1.0.0.vsix`) akan di-generate.
-4. Buka VSCode, arahkan ke tab *Extensions* -> Klik tanda elipsis (`...`) di kanan atas tab -> Pilih **Install from VSIX...**
-5. Pilih file `.vsix` yang baru saja di-generate.
+---
 
-## Configuration
-Pada VSCode, Anda dapat mengatur koneksi ke server Hermes secara default melalui konfigurasi jika diperlukan (bisa dimodifikasi di `settings.json`):
+## 🚀 Instalasi & Menjalankan Server
+
+### 1. Instalasi Dependensi
+Jalankan perintah berikut pada direktori utama proyek untuk memasang semua pustaka yang dibutuhkan:
+```bash
+npm install
+```
+
+### 2. Menjalankan Server (Mode Development)
+```bash
+npm run dev
+```
+Server akan aktif di `http://localhost:3000`.
+
+### 3. Menjalankan Server (Mode Production)
+Gunakan perintah build untuk mengompilasi TypeScript ke JavaScript sebelum dijalankan:
+```bash
+npm run build
+npm start
+```
+Atau jalankan skrip gabungan sekali klik:
+* **Windows**: `start.bat`
+* **Linux/macOS**: `bash start.sh`
+
+*(Skrip di atas akan mengompilasi kode dan mengaktifkan server di latar belakang menggunakan PM2)*
+
+---
+
+## 🔌 Instalasi Ekstensi VSCode
+
+1. Buka aplikasi **VSCode**.
+2. Masuk ke tab **Extensions** (`Ctrl+Shift+X` atau `Cmd+Shift+X`).
+3. Klik ikon menu tiga titik di pojok kanan atas tab Extensions, lalu pilih **Install from VSIX...**.
+4. Arahkan ke file berkas VSIX berikut:
+   `extensions/vscode/hermes-ilma-1.0.0.vsix`
+5. Setelah berhasil dipasang, ikon **Hermes** akan muncul pada Activity Bar di sisi kiri editor Anda.
+
+---
+
+## ⚙️ Konfigurasi Kustom
+
+File konfigurasi server dan LLM berada di `config/hermes.config.json`:
 ```json
 {
-  "hermes.server.url": "http://127.0.0.1",
-  "hermes.server.port": 3000,
-  "hermes.profile": "ILMA",
-  "hermes.mode": "review"
+  "server": {
+    "host": "0.0.0.0",
+    "port": 3000
+  },
+  "profile": "ILMA",
+  "llm": {
+    "baseUrl": "http://localhost:11434/v1",
+    "apiKey": "ollama",
+    "model": "llama3.2",
+    "timeout": 60000
+  }
 }
 ```
-*Catatan: fitur inject settings di atas merupakan standar operasi yang akan terus dikembangkan untuk rilis mendatang.*
 
-## Verification Steps
-1. Pastikan script server Hermes (Terminal 1) berjalan tanpa throw error.
-2. Saat VSCode terbuka, perhatikan pojok kanan bawah Status Bar, Anda harus melihat ikon `(circle-filled) Hermes Connected`.
-3. Buka tab Hermes di Activity Bar VSCode. Coba berinteraksi lewat form Chat ("hello hermes"). Jika terkoneksi, balasan stream akan di-render pada antarmuka webview.
+Jika port atau alamat server VSCode diubah, perbarui pengaturan ekstensi VSCode:
+1. Buka settings VSCode (`Ctrl+,` atau `Cmd+,`).
+2. Cari `Hermes Server Url`.
+3. Masukkan URL server Hermes kustom Anda (misal: `http://127.0.0.1:3000`).
 
-## Troubleshooting
-- **Koneksi Ditolak (ECONNREFUSED)**: Pastikan alamat IP di klien sesuai dengan setting konfigurasi server. Ganti `172.16.102.11` menjadi `127.0.0.1` di konfigurasi apabila Anda menjalankannya pada mesin lokal (*localhost*).
-- **Extensi tidak aktif/gagal memuat**: Tekan `Ctrl+Shift+P`, ketik "Developer: Show Window Log" atau "Developer: Show Extension Host Log" untuk melihat peringatan dan error saat aktivasi webview panel.
-- **Port Bentrok**: Jika Port `3000` telah digunakan program lain, Anda harus mematikannya (`Stop-Process` di Powershell/Task Manager), atau ganti opsi "port" di file `hermes.config.json`.
+---
+
+## 🛠️ Panduan Penanganan Masalah (Troubleshooting)
+
+### 🔴 Status "DISCONNECTED" pada VSCode Sidebar
+* Pastikan server Hermes sudah aktif (`npm start`).
+* Jika server berjalan di port kustom, pastikan `Hermes Server Url` pada settings VSCode telah disesuaikan.
+* Periksa log konsol server untuk memastikan tidak ada konflik port.
+
+### 🔴 Error: "LLM_UNAVAILABLE: Ollama tidak berjalan"
+* Pastikan aplikasi Ollama sedang aktif. Jalankan `ollama serve` di terminal untuk menyalakan Ollama secara manual.
+* Pastikan port `11434` dapat diakses dari browser dengan membuka `http://localhost:11434`.
+
+### 🔴 Error: "LLM_MODEL_NOT_FOUND"
+* Model LLM yang dikonfigurasi belum diunduh di sistem Anda. Unduh model menggunakan terminal:
+  ```bash
+  ollama pull llama3.2
+  ```
+
+### 🔴 Konflik Port 3000
+Jika port 3000 sedang digunakan oleh aplikasi lain, Anda dapat mematikan proses tersebut atau mengubah port di `config/hermes.config.json` pada objek `"server": { "port": 3001 }`.

@@ -1,8 +1,9 @@
 import { chat, LLMMessage } from '../server/adapter/llm';
 import { WorkspaceContext, AgentStep, ExecutionResult } from '../shared/types/agent';
-import { readFile, writeFile } from '../tools/filesystem';
+import { readFile, writeFile, generateDiff } from '../tools/filesystem';
 import { executeCommand } from '../tools/terminal';
 import { searchWorkspace } from '../tools/search';
+
 
 const CODE_GEN_SYSTEM_PROMPT = `You are ILMA, a coding agent. You are executing a specific file write step.
 Generate the complete file content that fulfills the step description.
@@ -119,10 +120,12 @@ ${before}`;
         }
         after = after.trim();
 
+        const unified = generateDiff(step.target, before, after);
         const diff = {
           before,
           after,
-          file: step.target
+          file: step.target,
+          unified
         };
 
         if (step.mode === 'review') {

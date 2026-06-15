@@ -17,12 +17,18 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.window.registerWebviewViewProvider('hermes.chatView', provider)
     );
 
-    // Register Command
-    let disposable = vscode.commands.registerCommand('hermes.startSession', () => {
-        vscode.window.showInformationMessage('Hermes Session Started');
+    // Register Commands
+    let startSessionDisposable = vscode.commands.registerCommand('hermes.startSession', () => {
+        vscode.window.showInformationMessage('Hermes Session Restarted');
+        provider.restartSession();
     });
 
-    context.subscriptions.push(disposable);
+    let configureDisposable = vscode.commands.registerCommand('hermes.configure', () => {
+        vscode.commands.executeCommand('workbench.action.openSettings', 'Hermes');
+    });
+
+    context.subscriptions.push(startSessionDisposable);
+    context.subscriptions.push(configureDisposable);
 }
 
 export function deactivate() {}
@@ -30,6 +36,7 @@ export function deactivate() {}
 class HermesChatViewProvider implements vscode.WebviewViewProvider {
     private sessionId: string | null = null;
     private serverUrl = 'http://127.0.0.1:3000';
+    private webviewView: vscode.WebviewView | null = null;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -38,6 +45,12 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         context: vscode.WebviewViewResolveContext,
         _token: vscode.CancellationToken,
     ) {
+        this.webviewView = webviewView;
+        
+        // Read configuration
+        const config = vscode.workspace.getConfiguration('hermes');
+        this.serverUrl = config.get<string>('serverUrl') || 'http://127.0.0.1:3000';
+
         webviewView.webview.options = {
             enableScripts: true,
             localResourceRoots: [this._extensionUri]
@@ -45,64 +58,96 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = this._getHtmlForWebview();
         
+        // Listen to configuration changes
+        vscode.workspace.onDidChangeConfiguration(e => {
+            if (e.affectsConfiguration('hermes.serverUrl')) {
+                const newUrl = vscode.workspace.getConfiguration('hermes').get<string>('serverUrl') || 'http://127.0.0.1:3000';
+                if (newUrl !== this.serverUrl) {
+                    this.serverUrl = newUrl;
+                    this.restartSession();
+                }
+            }
+        });
+
         // Start Session
         this.startSession().then(id => {
             this.sessionId = id;
-            webviewView.webview.postMessage({ type: 'receive', value: `Connected to Hermes Server. Session ID: ${id}` });
+            webviewView.webview.postMessage({ 
+                type: 'init', 
+                sessionId: id, 
+                serverUrl: this.serverUrl 
+            });
         }).catch(err => {
-            webviewView.webview.postMessage({ type: 'receive', value: `Failed to connect to Hermes Server: ${err.message}` });
+            webviewView.webview.postMessage({ 
+                type: 'error', 
+                value: `Failed to connect to Hermes Server: ${err.message}` 
+            });
         });
 
         webviewView.webview.onDidReceiveMessage(async data => {
+            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '/tmp/test';
             switch (data.type) {
-                case 'chat':
-                    {
-                        if (!this.sessionId) {
-                            webviewView.webview.postMessage({ type: 'receive', value: 'Error: No active session.' });
-                            return;
-                        }
-                        try {
-                            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '/tmp/test';
-                            const response = await fetch(`${this.serverUrl}/v1/agent/run`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({
-                                    session_id: this.sessionId,
-                                    task: data.value,
-                                    workspace: { root: workspaceRoot },
-                                    mode: 'review'
-                                })
+                case 'runAgent':
+                    try {
+                        const response = await fetch(`${this.serverUrl}/v1/agent/run`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                session_id: this.sessionId,
+                                task: data.task,
+                                workspace: { root: workspaceRoot },
+                                mode: 'review'
+                            })
+                        });
+                        if (!response.ok) {
+                            const errData = await response.json() as any;
+                            webviewView.webview.postMessage({ 
+                                type: 'error', 
+                                value: errData.error || 'Failed to start agent.' 
                             });
-
-                            if (!response.body) throw new Error('No response body');
-
-                            const reader = response.body.getReader();
-                            const decoder = new TextDecoder();
-                            let done = false;
-
-                            while (!done) {
-                                const { value, done: readerDone } = await reader.read();
-                                done = readerDone;
-                                if (value) {
-                                    const chunk = decoder.decode(value);
-                                    const lines = chunk.split('\n');
-                                    let currentEvent = '';
-                                    for (const line of lines) {
-                                        if (line.startsWith('event: ')) {
-                                            currentEvent = line.replace('event: ', '').trim();
-                                        } else if (line.startsWith('data: ')) {
-                                            const dataStr = line.replace('data: ', '').trim();
-                                            webviewView.webview.postMessage({ type: 'receive', value: `[${currentEvent}] ${dataStr}` });
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (err: any) {
-                            webviewView.webview.postMessage({ type: 'receive', value: `Error: ${err.message}` });
                         }
-                        break;
+                    } catch (err: any) {
+                        webviewView.webview.postMessage({ type: 'error', value: err.message });
                     }
+                    break;
+
+                case 'approveStep':
+                    try {
+                        await fetch(`${this.serverUrl}/v1/agent/approve/${this.sessionId}/${data.stepId}`, {
+                            method: 'POST'
+                        });
+                    } catch (err: any) {
+                        webviewView.webview.postMessage({ type: 'error', value: `Approve failed: ${err.message}` });
+                    }
+                    break;
+
+                case 'rejectStep':
+                    try {
+                        await fetch(`${this.serverUrl}/v1/agent/reject/${this.sessionId}/${data.stepId}`, {
+                            method: 'POST'
+                        });
+                    } catch (err: any) {
+                        webviewView.webview.postMessage({ type: 'error', value: `Reject failed: ${err.message}` });
+                    }
+                    break;
             }
+        });
+    }
+
+    public restartSession() {
+        if (!this.webviewView) return;
+        this.startSession().then(id => {
+            this.sessionId = id;
+            this.webviewView?.webview.postMessage({ 
+                type: 'init', 
+                sessionId: id, 
+                serverUrl: this.serverUrl 
+            });
+        }).catch(err => {
+            this.webviewView?.webview.postMessage({ 
+                type: 'error', 
+                value: `Failed to reconnect: ${err.message}` 
+            });
         });
     }
 
@@ -113,6 +158,9 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ workspace: workspaceRoot, profile: 'ILMA' })
         });
+        if (!res.ok) {
+            throw new Error(`Server returned status ${res.status}`);
+        }
         const data = await res.json() as any;
         return data.session_id;
     }
@@ -125,39 +173,503 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
                 <title>Hermes Chat</title>
                 <style>
-                    body { font-family: var(--vscode-font-family); padding: 10px; }
-                    .chat-box { height: 300px; overflow-y: auto; border: 1px solid var(--vscode-panel-border); margin-bottom: 10px; padding: 5px; }
-                    .message { margin-bottom: 5px; }
-                    input { width: 100%; padding: 5px; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); }
+                    :root {
+                        --padding: 12px;
+                        --primary: #5850ec;
+                        --primary-hover: #453e9c;
+                        --bg-user: rgba(88, 80, 236, 0.15);
+                        --bg-agent: var(--vscode-editor-inactiveSelectionBackground);
+                        --border: var(--vscode-panel-border);
+                        --text: var(--vscode-foreground);
+                        --font-size: 13px;
+                    }
+                    body {
+                        font-family: var(--vscode-font-family, sans-serif);
+                        font-size: var(--font-size);
+                        color: var(--text);
+                        background: var(--vscode-editor-background);
+                        padding: 0;
+                        margin: 0;
+                        display: flex;
+                        flex-direction: column;
+                        height: 100vh;
+                        overflow: hidden;
+                    }
+                    
+                    /* Header Status Bar */
+                    .status-header {
+                        display: flex;
+                        align-items: center;
+                        justify-content: space-between;
+                        padding: 8px var(--padding);
+                        background: var(--vscode-sideBar-background);
+                        border-bottom: 1px solid var(--border);
+                        font-size: 11px;
+                        font-weight: 600;
+                    }
+                    .status-indicator {
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                    }
+                    .status-dot {
+                        width: 8px;
+                        height: 8px;
+                        border-radius: 50%;
+                        background: #888;
+                        transition: background 0.3s ease;
+                    }
+                    .status-dot.idle { background: #10B981; }
+                    .status-dot.thinking { 
+                        background: #F59E0B; 
+                        animation: pulse 1.2s infinite ease-in-out;
+                    }
+                    .status-dot.executing { background: #3B82F6; }
+                    .status-dot.awaiting { background: #F97316; }
+                    .status-dot.error { background: #EF4444; }
+                    .status-dot.reconnecting { 
+                        background: #F59E0B;
+                        animation: pulse 0.8s infinite ease-in-out;
+                    }
+
+                    @keyframes pulse {
+                        0% { opacity: 0.3; }
+                        50% { opacity: 1; }
+                        100% { opacity: 0.3; }
+                    }
+
+                    /* Chat Area */
+                    .chat-container {
+                        flex: 1;
+                        overflow-y: auto;
+                        padding: var(--padding);
+                        display: flex;
+                        flex-direction: column;
+                        gap: 12px;
+                    }
+                    
+                    .message {
+                        max-width: 90%;
+                        padding: 10px 12px;
+                        border-radius: 8px;
+                        line-height: 1.4;
+                        word-wrap: break-word;
+                    }
+                    .message.user {
+                        align-self: flex-end;
+                        background: var(--bg-user);
+                        border-bottom-right-radius: 2px;
+                    }
+                    .message.agent {
+                        align-self: flex-start;
+                        background: var(--bg-agent);
+                        border-bottom-left-radius: 2px;
+                    }
+                    
+                    /* Collapsible Plan Container */
+                    .plan-container {
+                        margin-top: 8px;
+                        border: 1px solid var(--border);
+                        border-radius: 6px;
+                        background: var(--vscode-sideBar-background);
+                        overflow: hidden;
+                    }
+                    .plan-header {
+                        padding: 6px 10px;
+                        font-weight: bold;
+                        background: rgba(0,0,0,0.1);
+                        cursor: pointer;
+                        display: flex;
+                        justify-content: space-between;
+                        font-size: 11px;
+                    }
+                    .plan-steps {
+                        padding: 6px 10px;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 6px;
+                    }
+                    .plan-step {
+                        display: flex;
+                        align-items: flex-start;
+                        gap: 8px;
+                        font-size: 12px;
+                    }
+                    .step-icon {
+                        font-size: 12px;
+                        line-height: 1;
+                    }
+                    .step-desc {
+                        flex: 1;
+                    }
+
+                    /* Unified Diff Viewer */
+                    .diff-container {
+                        margin-top: 8px;
+                        border: 1px solid var(--border);
+                        border-radius: 6px;
+                        background: #1e1e1e;
+                        font-family: var(--vscode-editor-font-family, monospace);
+                        font-size: 11px;
+                        overflow-x: auto;
+                    }
+                    .diff-header {
+                        padding: 4px 8px;
+                        background: #333;
+                        color: #ccc;
+                        border-bottom: 1px solid #444;
+                        font-weight: bold;
+                    }
+                    .diff-lines {
+                        padding: 6px;
+                        white-space: pre;
+                    }
+                    .diff-line {
+                        display: block;
+                        padding: 1px 4px;
+                    }
+                    .diff-line.addition {
+                        background-color: rgba(16, 185, 129, 0.2);
+                        color: #A7F3D0;
+                    }
+                    .diff-line.deletion {
+                        background-color: rgba(239, 68, 68, 0.2);
+                        color: #FCA5A5;
+                    }
+                    .diff-line.meta {
+                        color: #888;
+                    }
+
+                    /* Action Buttons Panel */
+                    .action-panel {
+                        margin-top: 8px;
+                        display: flex;
+                        gap: 8px;
+                    }
+                    button {
+                        padding: 6px 12px;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-weight: 600;
+                        font-size: 12px;
+                        flex: 1;
+                        color: var(--vscode-button-foreground);
+                        background: var(--vscode-button-background);
+                    }
+                    button:hover {
+                        background: var(--vscode-button-hoverBackground);
+                    }
+                    button.reject {
+                        background: var(--vscode-button-secondaryBackground, #4b5563);
+                        color: var(--vscode-button-secondaryForeground, #fff);
+                    }
+                    button.reject:hover {
+                        background: rgba(75, 85, 99, 0.8);
+                    }
+
+                    /* Input Box Container */
+                    .input-container {
+                        padding: var(--padding);
+                        background: var(--vscode-sideBar-background);
+                        border-top: 1px solid var(--border);
+                        display: flex;
+                        gap: 8px;
+                    }
+                    textarea {
+                        flex: 1;
+                        background: var(--vscode-input-background);
+                        color: var(--vscode-input-foreground);
+                        border: 1px solid var(--vscode-input-border);
+                        border-radius: 4px;
+                        padding: 8px;
+                        resize: none;
+                        height: 36px;
+                        font-family: inherit;
+                        font-size: inherit;
+                        outline: none;
+                    }
+                    textarea::placeholder {
+                        color: var(--vscode-input-placeholderForeground);
+                    }
+                    textarea:focus {
+                        border-color: var(--vscode-focusBorder);
+                    }
+                    .send-btn {
+                        width: 36px;
+                        height: 36px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        border-radius: 4px;
+                        padding: 0;
+                        flex: none;
+                    }
                 </style>
             </head>
             <body>
-                <div class="chat-box" id="chatBox">
-                    <div class="message"><strong>Hermes:</strong> Ready.</div>
+                <!-- Header Status -->
+                <div class="status-header">
+                    <div id="connectionStatusText">Connecting...</div>
+                    <div class="status-indicator">
+                        <div id="statusDot" class="status-dot"></div>
+                        <span id="statusLabel">Initializing</span>
+                    </div>
                 </div>
-                <input type="text" id="chatInput" placeholder="Ask Hermes..." />
+
+                <!-- Chat Messages -->
+                <div class="chat-container" id="chatContainer">
+                    <div class="message agent">
+                        <strong>Hermes:</strong> Halo! Ada yang bisa saya bantu hari ini?
+                    </div>
+                </div>
+
+                <!-- Input Box -->
+                <div class="input-container">
+                    <textarea id="chatInput" placeholder="Ketik perintah di sini..."></textarea>
+                    <button class="send-btn" id="sendBtn">▶</button>
+                </div>
 
                 <script>
                     const vscode = acquireVsCodeApi();
-                    const input = document.getElementById('chatInput');
-                    const chatBox = document.getElementById('chatBox');
+                    let sessionId = null;
+                    let serverUrl = null;
+                    let eventSource = null;
+                    let reconnectTimer = null;
 
-                    input.addEventListener('keypress', (e) => {
-                        if (e.key === 'Enter' && input.value) {
-                            const val = input.value;
-                            chatBox.innerHTML += \`<div class="message"><strong>You:</strong> \${val}</div>\`;
-                            vscode.postMessage({ type: 'chat', value: val });
-                            input.value = '';
-                        }
-                    });
+                    const chatContainer = document.getElementById('chatContainer');
+                    const chatInput = document.getElementById('chatInput');
+                    const sendBtn = document.getElementById('sendBtn');
+                    const connectionStatusText = document.getElementById('connectionStatusText');
+                    const statusDot = document.getElementById('statusDot');
+                    const statusLabel = document.getElementById('statusLabel');
+
+                    function setStatus(status, labelText) {
+                        statusDot.className = 'status-dot ' + status;
+                        statusLabel.textContent = labelText || status.charAt(0).toUpperCase() + status.slice(1);
+                    }
+
+                    function connectSSE(sid) {
+                        if (eventSource) eventSource.close();
+                        
+                        console.log('Connecting EventSource to: ' + serverUrl + '/v1/session/' + sid + '/stream');
+                        eventSource = new EventSource(serverUrl + '/v1/session/' + sid + '/stream');
+
+                        eventSource.onopen = () => {
+                            clearTimeout(reconnectTimer);
+                            connectionStatusText.textContent = "CONNECTED";
+                            setStatus('idle', 'Ready');
+                        };
+
+                        eventSource.onerror = (e) => {
+                            console.error('SSE Error:', e);
+                            eventSource.close();
+                            connectionStatusText.textContent = "DISCONNECTED";
+                            setStatus('reconnecting', 'Reconnecting...');
+                            reconnectTimer = setTimeout(() => connectSSE(sid), 3000);
+                        };
+
+                        eventSource.addEventListener('plan', e => {
+                            const plan = JSON.parse(e.data);
+                            renderPlan(plan);
+                        });
+
+                        eventSource.addEventListener('diff', e => {
+                            const diff = JSON.parse(e.data);
+                            renderDiff(diff);
+                        });
+
+                        eventSource.addEventListener('awaiting_approval', e => {
+                            const data = JSON.parse(e.data);
+                            showApprovalButtons(data.step_id);
+                            setStatus('awaiting', 'Awaiting Approval');
+                        });
+
+                        eventSource.addEventListener('applied', e => {
+                            const data = JSON.parse(e.data);
+                            markStepDone(data.stepId);
+                            setStatus('idle', 'Ready');
+                        });
+
+                        eventSource.addEventListener('rejected', e => {
+                            const data = JSON.parse(e.data);
+                            markStepRejected(data.stepId);
+                            setStatus('idle', 'Ready');
+                        });
+
+                        eventSource.addEventListener('result', e => {
+                            const res = JSON.parse(e.data);
+                            appendResult(res);
+                        });
+
+                        eventSource.addEventListener('error', e => {
+                            const data = JSON.parse(e.data);
+                            showError(data.error);
+                            setStatus('error', 'Error occurred');
+                        });
+
+                        eventSource.addEventListener('done', e => {
+                            setStatus('idle', 'Ready');
+                            appendAgentMessage("<strong>System:</strong> Task completed successfully!");
+                        });
+                    }
 
                     window.addEventListener('message', event => {
-                        const message = event.data;
-                        if (message.type === 'receive') {
-                            chatBox.innerHTML += \`<div class="message"><strong>Hermes:</strong> \${message.value}</div>\`;
-                            chatBox.scrollTop = chatBox.scrollHeight;
+                        const msg = event.data;
+                        if (msg.type === 'init') {
+                            sessionId = msg.sessionId;
+                            serverUrl = msg.serverUrl;
+                            connectSSE(sessionId);
+                        } else if (msg.type === 'error') {
+                            showError(msg.value);
                         }
                     });
+
+                    // Send Action
+                    function handleSend() {
+                        const task = chatInput.value.trim();
+                        if (!task || !sessionId) return;
+
+                        // Append User message
+                        const userMsg = document.createElement('div');
+                        userMsg.className = 'message user';
+                        userMsg.textContent = task;
+                        chatContainer.appendChild(userMsg);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+                        // Post message to extension to start run
+                        vscode.postMessage({
+                            type: 'runAgent',
+                            task: task
+                        });
+
+                        chatInput.value = '';
+                        setStatus('thinking', 'Thinking...');
+                    }
+
+                    sendBtn.addEventListener('click', handleSend);
+                    chatInput.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                            e.preventDefault();
+                            handleSend();
+                        }
+                    });
+
+                    function appendAgentMessage(htmlContent) {
+                        const msg = document.createElement('div');
+                        msg.className = 'message agent';
+                        msg.innerHTML = htmlContent;
+                        chatContainer.appendChild(msg);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                        return msg;
+                    }
+
+                    // Render Plan
+                    function renderPlan(plan) {
+                        const html = \`
+                            <strong>Goal:</strong> \${plan.goal}
+                            <div class="plan-container">
+                                <div class="plan-header" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'flex' : 'none'">
+                                    <span>Plan Details (\${plan.steps.length} steps)</span>
+                                    <span>▼</span>
+                                </div>
+                                <div class="plan-steps" id="stepsList">
+                                    \${plan.steps.map(step => \`
+                                        <div class="plan-step" id="step-\${step.id}">
+                                            <span class="step-icon">⏳</span>
+                                            <span class="step-desc"><strong>\${step.action}:</strong> \${step.description}</span>
+                                        </div>
+                                    \`).join('')}
+                                </div>
+                            </div>
+                        \`;
+                        appendAgentMessage(html);
+                    }
+
+                    function renderDiff(diff) {
+                        const lines = diff.unified.split('\\n');
+                        const lineHtml = lines.map(line => {
+                            if (line.startsWith('+') && !line.startsWith('+++')) {
+                                return \`<span class="diff-line addition">\${escapeHtml(line)}</span>\`;
+                            } else if (line.startsWith('-') && !line.startsWith('---')) {
+                                return \`<span class="diff-line deletion">\${escapeHtml(line)}</span>\`;
+                            } else if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) {
+                                return \`<span class="diff-line meta">\${escapeHtml(line)}</span>\`;
+                            } else {
+                                return \`<span class="diff-line">\${escapeHtml(line)}</span>\`;
+                            }
+                        }).join('');
+
+                        const html = \`
+                            <strong>Suggested File Changes:</strong>
+                            <div class="diff-container">
+                                <div class="diff-header">\${diff.file}</div>
+                                <div class="diff-lines">\${lineHtml}</div>
+                            </div>
+                        \`;
+                        appendAgentMessage(html);
+                    }
+
+                    function showApprovalButtons(stepId) {
+                        const panel = document.createElement('div');
+                        panel.className = 'action-panel';
+                        panel.id = 'approval-panel-' + stepId;
+                        
+                        const applyBtn = document.createElement('button');
+                        applyBtn.textContent = 'Apply';
+                        applyBtn.onclick = () => {
+                            vscode.postMessage({ type: 'approveStep', stepId });
+                            panel.remove();
+                            setStatus('executing', 'Writing file...');
+                        };
+
+                        const rejectBtn = document.createElement('button');
+                        rejectBtn.className = 'reject';
+                        rejectBtn.textContent = 'Reject';
+                        rejectBtn.onclick = () => {
+                            vscode.postMessage({ type: 'rejectStep', stepId });
+                            panel.remove();
+                            setStatus('idle', 'Ready');
+                        };
+
+                        panel.appendChild(applyBtn);
+                        panel.appendChild(rejectBtn);
+                        chatContainer.appendChild(panel);
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+
+                    function markStepDone(stepId) {
+                        const stepEl = document.getElementById('step-' + stepId);
+                        if (stepEl) {
+                            stepEl.querySelector('.step-icon').textContent = '✅';
+                        }
+                    }
+
+                    function markStepRejected(stepId) {
+                        const stepEl = document.getElementById('step-' + stepId);
+                        if (stepEl) {
+                            stepEl.querySelector('.step-icon').textContent = '❌';
+                        }
+                    }
+
+                    function appendResult(res) {
+                        markStepDone(res.stepId);
+                        const output = res.output ? \`<pre style="background: rgba(0,0,0,0.15); padding: 6px; border-radius: 4px; font-size:11px;">\${escapeHtml(res.output)}</pre>\` : 'Executed step successfully.';
+                        appendAgentMessage(\`<strong>Result step \${res.stepId}:</strong> \${output}\`);
+                    }
+
+                    function showError(errText) {
+                        appendAgentMessage(\`<strong style="color:var(--vscode-errorForeground)">Error:</strong> \${escapeHtml(errText)}\`);
+                    }
+
+                    function escapeHtml(text) {
+                        return text
+                            .replace(/&/g, "&amp;")
+                            .replace(/</g, "&lt;")
+                            .replace(/>/g, "&gt;")
+                            .replace(/"/g, "&quot;")
+                            .replace(/'/g, "&#039;");
+                    }
                 </script>
             </body>
             </html>`;
