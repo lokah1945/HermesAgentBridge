@@ -3,3 +3,5 @@ dist/
 out/
 *.vsix
 .vscode-test/
+test_agent_run.json
+

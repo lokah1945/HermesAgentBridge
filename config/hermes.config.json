@@ -25,5 +25,11 @@
     "terminal": true,
     "git": true,
     "search": true
+  },
+  "llm": {
+    "baseUrl": "http://localhost:11434/v1",
+    "apiKey": "ollama",
+    "model": "llama3.2",
+    "timeout": 60000
   }
 }

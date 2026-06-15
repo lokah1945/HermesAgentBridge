@@ -19,8 +19,8 @@
 | Extension Activation | ~120ms | < 500ms | ✅ Yes |
 
 ## Known Issues
-- Fitur LLM (Adapter Layer OpenAI) saat ini masih memantulkan pseudo-stub data agar testing lolos; belum disambungkan ke Local LLM Engine (Llama.cpp/Ollama) untuk profile Hermes ILMA.
-- Pada OS Windows, `grep` untuk pencarian workspace disimulasikan menggunakan `findstr`. Fungsionalitas cross-platform harus diuji lebih lanjut di Mac/Linux.
+- Fitur LLM (Adapter Layer OpenAI) telah berhasil disambungkan ke Local LLM Engine (Ollama). Untuk beroperasi secara penuh, server memerlukan instansi Ollama yang berjalan secara lokal pada `http://localhost:11434` dengan model `llama3.2`.
+- Pencarian workspace cross-platform telah diperbaiki untuk menggunakan `findstr` secara native di OS Windows dan `grep` di Mac/Linux.
 
 ## Regression Checklist
 - [x] Basic HTTP Server Boot
