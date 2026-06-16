@@ -11,7 +11,7 @@
 | **SSE Auto-Reconnect** | Koneksi melakukan reconnect otomatis dengan exponential backoff dan ID recovery | Webview client memulihkan koneksi SSE yang terputus dengan `Last-Event-ID` header. | ✅ PASS |
 | **Zod API Schema Validation** | Validasi payload request body untuk semua endpoint Express | Schema validation terintegrasi dengan middleware Express dan mengembalikan 400 Bad Request jika tidak valid. | ✅ PASS |
 | **PM2 Process Control** | Pengelolaan proses handal di background dengan monitoring memori | PM2 dikonfigurasi dengan limit memori 200MB, auto-restart on crash, dan mode `production`. | ✅ PASS |
-| **Unit & Integration Tests** | Cakupan tes di atas 60% dengan vitest | Semua 20 unit & integration test pada filesystem, terminal, git, LLM, dan server route lulus 100%. | ✅ PASS |
+| **Unit & Integration Tests** | Cakupan tes di atas 60% dengan vitest | Semua 20 unit & integration test pada filesystem, terminal, git, LLM backend, dan server route lulus 100%. | ✅ PASS |
 
 ## Hardening Performance Metrics
 | Metric | Hardened Value | Threshold | Pass? |
