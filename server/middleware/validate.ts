@@ -7,7 +7,7 @@ export function validateBody(schema: ZodSchema) {
     if (!result.success) {
       return res.status(400).json({
         error: 'VALIDATION_ERROR',
-        details: result.error.errors.map(err => ({
+        details: result.error.issues.map((err: any) => ({
           path: err.path.join('.'),
           message: err.message
         }))
