@@ -29,7 +29,7 @@ export class SessionController {
   }
 
   public getStream(req: Request, res: Response): void {
-    const { sessionId } = req.params;
+    const sessionId = req.params.sessionId as string;
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
