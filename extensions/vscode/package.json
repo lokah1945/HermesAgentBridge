@@ -12,7 +12,8 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:hermes.chatView"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -20,6 +21,22 @@
       {
         "command": "hermes.startSession",
         "title": "Hermes: Start Session"
+      },
+      {
+        "command": "hermes.openSidebar",
+        "title": "Hermes: Open Sidebar",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "hermes.configure",
+        "title": "Hermes: Open Settings"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "hermes.openSidebar",
+        "key": "ctrl+shift+h",
+        "mac": "cmd+shift+h"
       }
     ],
     "viewsContainers": {
@@ -39,6 +56,36 @@
           "name": "Agent Chat"
         }
       ]
+    },
+    "configuration": {
+      "title": "Hermes Agent Bridge",
+      "properties": {
+        "hermes.serverHost": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "description": "Hermes server IP address or hostname"
+        },
+        "hermes.serverPort": {
+          "type": "number",
+          "default": 3000,
+          "description": "Hermes server port"
+        },
+        "hermes.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "description": "Full Hermes server URL (overrides host/port if set manually)"
+        },
+        "hermes.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "API key for Hermes server (if required)"
+        },
+        "hermes.profile": {
+          "type": "string",
+          "default": "ilma",
+          "description": "Hermes agent profile name"
+        }
+      }
     }
   },
   "scripts": {
