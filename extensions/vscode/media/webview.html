@@ -63,6 +63,16 @@
             background: #F59E0B;
             animation: pulse 0.8s infinite ease-in-out;
         }
+        .server-url {
+            font-size: 10px;
+            opacity: 0.6;
+            margin-left: auto;
+            font-family: monospace;
+            max-width: 60%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
 
         @keyframes pulse {
             0% { opacity: 0.3; }
@@ -548,6 +558,17 @@
             if (msg.type === 'init') {
                 sessionId = msg.sessionId;
                 serverUrl = msg.serverUrl;
+                // Display server URL in header
+                const existingUrlEl = document.querySelector('.server-url');
+                if (existingUrlEl) existingUrlEl.remove();
+                const statusHeader = document.querySelector('.status-header');
+                if (statusHeader && serverUrl) {
+                    const urlDisplay = document.createElement('div');
+                    urlDisplay.className = 'server-url';
+                    urlDisplay.title = serverUrl;
+                    urlDisplay.textContent = serverUrl;
+                    statusHeader.appendChild(urlDisplay);
+                }
                 connectSSE(sessionId);
             } else if (msg.type === 'error') {
                 if (msg.status === 503 || msg.value.includes('LLM_UNAVAILABLE') || msg.value.includes('Ollama tidak berjalan')) {
