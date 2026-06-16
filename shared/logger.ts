@@ -1,6 +1,14 @@
+import { config } from './config';
+
 export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
+const LEVELS: Record<LogLevel, number> = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
+
 class Logger {
+  private currentLevel(): number {
+    return LEVELS[config.logLevel as LogLevel] ?? 1;
+  }
+
   private getTimestamp(): string {
     return new Date().toISOString();
   }
@@ -12,20 +20,22 @@ class Logger {
   }
 
   public debug(message: string, meta?: any): void {
-    if (process.env.NODE_ENV !== 'production' || process.env.DEBUG) {
-      console.debug(this.formatMessage('DEBUG', message, meta));
-    }
+    if (LEVELS.DEBUG < this.currentLevel()) return;
+    console.debug(this.formatMessage('DEBUG', message, meta));
   }
 
   public info(message: string, meta?: any): void {
+    if (LEVELS.INFO < this.currentLevel()) return;
     console.info(this.formatMessage('INFO', message, meta));
   }
 
   public warn(message: string, meta?: any): void {
+    if (LEVELS.WARN < this.currentLevel()) return;
     console.warn(this.formatMessage('WARN', message, meta));
   }
 
   public error(message: string, error?: any, meta?: any): void {
+    if (LEVELS.ERROR < this.currentLevel()) return;
     const combinedMeta = {
       ...(error instanceof Error ? { error: error.message, stack: error.stack } : { error }),
       ...meta
@@ -35,3 +45,4 @@ class Logger {
 }
 
 export const logger = new Logger();
+

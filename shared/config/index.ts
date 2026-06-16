@@ -35,7 +35,8 @@ const configSchema = z.object({
     apiKey: z.string().default("ollama"),
     model: z.string().default("llama3.2"),
     timeout: z.number().int().default(60000)
-  })
+  }),
+  logLevel: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).default('INFO')
 });
 
 export type HermesConfig = z.infer<typeof configSchema>;
@@ -84,6 +85,9 @@ function loadConfig(): HermesConfig {
   if (process.env.HERMES_LLM_BASE_URL) {
     rawConfig.llm = rawConfig.llm || {};
     rawConfig.llm.baseUrl = process.env.HERMES_LLM_BASE_URL;
+  }
+  if (process.env.HERMES_LOG_LEVEL) {
+    rawConfig.logLevel = process.env.HERMES_LOG_LEVEL;
   }
 
   const result = configSchema.safeParse(rawConfig);
