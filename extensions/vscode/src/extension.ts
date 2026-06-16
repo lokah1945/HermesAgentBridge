@@ -593,6 +593,8 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                     let serverUrl = null;
                     let eventSource = null;
                     let reconnectTimer = null;
+                    let lastEventId = null;
+                    let reconnectAttempts = 0;
 
                     const chatContainer = document.getElementById('chatContainer');
                     const chatInput = document.getElementById('chatInput');
@@ -619,11 +621,17 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                     function connectSSE(sid) {
                         if (eventSource) eventSource.close();
                         
-                        console.log('Connecting EventSource to: ' + serverUrl + '/v1/session/' + sid + '/stream');
-                        eventSource = new EventSource(serverUrl + '/v1/session/' + sid + '/stream');
+                        let url = serverUrl + '/v1/session/' + sid + '/stream';
+                        if (lastEventId) {
+                            url += '?lastEventId=' + lastEventId;
+                        }
+                        
+                        console.log('Connecting EventSource to: ' + url);
+                        eventSource = new EventSource(url);
 
                         eventSource.onopen = () => {
                             clearTimeout(reconnectTimer);
+                            reconnectAttempts = 0;
                             connectionStatusText.textContent = "CONNECTED";
                             setStatus('idle', 'Ready');
                         };
@@ -633,15 +641,28 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                             eventSource.close();
                             connectionStatusText.textContent = "DISCONNECTED";
                             setStatus('reconnecting', 'Reconnecting...');
-                            reconnectTimer = setTimeout(() => connectSSE(sid), 3000);
+                            
+                            // Exponential backoff
+                            const delay = Math.min(Math.pow(2, reconnectAttempts) * 1000, 30000);
+                            reconnectAttempts++;
+                            console.log('Reconnecting in ' + delay + 'ms (attempt ' + reconnectAttempts + ')');
+                            reconnectTimer = setTimeout(() => connectSSE(sid), delay);
+                        };
+
+                        const updateLastEventId = (e) => {
+                            if (e.lastEventId) {
+                                lastEventId = e.lastEventId;
+                            }
                         };
 
                         eventSource.addEventListener('plan', e => {
+                            updateLastEventId(e);
                             const plan = JSON.parse(e.data);
                             renderPlan(plan);
                         });
 
                         eventSource.addEventListener('diff', e => {
+                            updateLastEventId(e);
                             const diff = JSON.parse(e.data);
                             if (diff.action === 'run_command') {
                                 renderTerminalBlock(diff);
@@ -651,29 +672,34 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         });
 
                         eventSource.addEventListener('awaiting_approval', e => {
+                            updateLastEventId(e);
                             const data = JSON.parse(e.data);
                             showApprovalButtons(data.step_id, data.action);
                             setStatus('awaiting', 'Awaiting Approval');
                         });
 
                         eventSource.addEventListener('applied', e => {
+                            updateLastEventId(e);
                             const data = JSON.parse(e.data);
                             markStepDone(data.stepId);
                             setStatus('idle', 'Ready');
                         });
 
                         eventSource.addEventListener('rejected', e => {
+                            updateLastEventId(e);
                             const data = JSON.parse(e.data);
                             markStepRejected(data.stepId);
                             setStatus('idle', 'Ready');
                         });
 
                         eventSource.addEventListener('result', e => {
+                            updateLastEventId(e);
                             const res = JSON.parse(e.data);
                             appendResult(res);
                         });
 
                         eventSource.addEventListener('error', e => {
+                            updateLastEventId(e);
                             const data = JSON.parse(e.data);
                             if (data.error && (data.error.includes('LLM_UNAVAILABLE') || data.error.includes('Ollama tidak berjalan'))) {
                                 showOllamaDownOverlay();
@@ -684,6 +710,7 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         });
 
                         eventSource.addEventListener('done', e => {
+                            updateLastEventId(e);
                             setStatus('idle', 'Ready');
                             appendAgentMessage("<strong>System:</strong> Task completed successfully!");
                         });
