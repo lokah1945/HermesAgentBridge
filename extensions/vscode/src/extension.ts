@@ -42,7 +42,7 @@ export function deactivate() {}
 
 class HermesChatViewProvider implements vscode.WebviewViewProvider {
     private sessionId: string | null = null;
-    private serverUrl = 'http://127.0.0.1:3000';
+    private serverUrl = 'http://172.16.102.11:3000';
     private webviewView: vscode.WebviewView | null = null;
 
     constructor(private readonly _extensionUri: vscode.Uri) {}
@@ -56,10 +56,10 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
         // Read configuration (host/port/url)
         const config = vscode.workspace.getConfiguration('hermes');
-        const host = config.get<string>('serverHost') || '127.0.0.1';
+        const host = config.get<string>('serverHost') || '172.16.102.11';
         const port = config.get<number>('serverPort') || 3000;
         const customUrl = config.get<string>('serverUrl');
-        this.serverUrl = (customUrl && customUrl !== 'http://127.0.0.1:3000')
+        this.serverUrl = (customUrl && customUrl !== 'http://172.16.102.11:3000')
             ? customUrl
             : `http://${host}:${port}`;
 
@@ -79,10 +79,10 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('hermes')) {
                 const newConfig = vscode.workspace.getConfiguration('hermes');
-                const newHost = newConfig.get<string>('serverHost') || '127.0.0.1';
+                const newHost = newConfig.get<string>('serverHost') || '172.16.102.11';
                 const newPort = newConfig.get<number>('serverPort') || 3000;
                 const newCustomUrl = newConfig.get<string>('serverUrl');
-                const newUrl = (newCustomUrl && newCustomUrl !== 'http://127.0.0.1:3000')
+                const newUrl = (newCustomUrl && newCustomUrl !== 'http://172.16.102.11:3000')
                     ? newCustomUrl
                     : `http://${newHost}:${newPort}`;
                 if (newUrl !== this.serverUrl) {
