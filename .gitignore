@@ -5,5 +5,4 @@ out/
 .vscode-test/
 test_agent_run.json
 data/
-
-
+coverage/

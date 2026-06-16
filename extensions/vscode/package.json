@@ -3,6 +3,7 @@
   "displayName": "Hermes Agent Bridge",
   "description": "Hermes Coding Agent Platform Extension",
   "version": "1.0.0",
+  "publisher": "hermes-local",
   "engines": {
     "vscode": "^1.80.0"
   },
