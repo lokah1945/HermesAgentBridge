@@ -31,9 +31,9 @@ const configSchema = z.object({
     search: z.boolean().default(true)
   }),
   llm: z.object({
-    baseUrl: z.string().default("http://localhost:11434/v1"),
-    apiKey: z.string().default("ollama"),
-    model: z.string().default("llama3.2"),
+    baseUrl: z.string().default("http://localhost:8000/v1"),
+    apiKey: z.string().default("default-api-key"),
+    model: z.string().default("default-model"),
     timeout: z.number().int().default(60000)
   }),
   logLevel: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).default('INFO')

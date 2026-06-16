@@ -27,9 +27,9 @@
     "search": true
   },
   "llm": {
-    "baseUrl": "http://localhost:11434/v1",
-    "apiKey": "ollama",
-    "model": "llama3.2",
+    "baseUrl": "http://localhost:8000/v1",
+    "apiKey": "default-api-key",
+    "model": "default-model",
     "timeout": 60000
   }
 }
