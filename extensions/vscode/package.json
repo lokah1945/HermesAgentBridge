@@ -62,7 +62,7 @@
       "properties": {
         "hermes.serverHost": {
           "type": "string",
-          "default": "127.0.0.1",
+          "default": "172.16.102.11",
           "description": "Hermes server IP address or hostname"
         },
         "hermes.serverPort": {
@@ -72,7 +72,7 @@
         },
         "hermes.serverUrl": {
           "type": "string",
-          "default": "http://127.0.0.1:3000",
+          "default": "http://172.16.102.11:3000",
           "description": "Full Hermes server URL (overrides host/port if set manually)"
         },
         "hermes.apiKey": {
