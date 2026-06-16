@@ -29,8 +29,13 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('workbench.action.openSettings', 'Hermes');
     });
 
+    let openSidebarDisposable = vscode.commands.registerCommand('hermes.openSidebar', () => {
+        vscode.commands.executeCommand('workbench.view.extension.hermes-sidebar');
+    });
+
     context.subscriptions.push(startSessionDisposable);
     context.subscriptions.push(configureDisposable);
+    context.subscriptions.push(openSidebarDisposable);
 }
 
 export function deactivate() {}
@@ -48,10 +53,15 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         _token: vscode.CancellationToken,
     ) {
         this.webviewView = webviewView;
-        
-        // Read configuration
+
+        // Read configuration (host/port/url)
         const config = vscode.workspace.getConfiguration('hermes');
-        this.serverUrl = config.get<string>('serverUrl') || 'http://127.0.0.1:3000';
+        const host = config.get<string>('serverHost') || '127.0.0.1';
+        const port = config.get<number>('serverPort') || 3000;
+        const customUrl = config.get<string>('serverUrl');
+        this.serverUrl = (customUrl && customUrl !== 'http://127.0.0.1:3000')
+            ? customUrl
+            : `http://${host}:${port}`;
 
         webviewView.webview.options = {
             enableScripts: true,
@@ -59,11 +69,22 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         };
 
         webviewView.webview.html = this._getHtmlForWebview();
-        
+
+        // Handle webview disposal
+        webviewView.onDidDispose(() => {
+            this.webviewView = null;
+        });
+
         // Listen to configuration changes
         vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration('hermes.serverUrl')) {
-                const newUrl = vscode.workspace.getConfiguration('hermes').get<string>('serverUrl') || 'http://127.0.0.1:3000';
+            if (e.affectsConfiguration('hermes')) {
+                const newConfig = vscode.workspace.getConfiguration('hermes');
+                const newHost = newConfig.get<string>('serverHost') || '127.0.0.1';
+                const newPort = newConfig.get<number>('serverPort') || 3000;
+                const newCustomUrl = newConfig.get<string>('serverUrl');
+                const newUrl = (newCustomUrl && newCustomUrl !== 'http://127.0.0.1:3000')
+                    ? newCustomUrl
+                    : `http://${newHost}:${newPort}`;
                 if (newUrl !== this.serverUrl) {
                     this.serverUrl = newUrl;
                     this.restartSession();
@@ -74,15 +95,15 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         // Start Session
         this.startSession().then(id => {
             this.sessionId = id;
-            webviewView.webview.postMessage({ 
-                type: 'init', 
-                sessionId: id, 
-                serverUrl: this.serverUrl 
+            webviewView.webview.postMessage({
+                type: 'init',
+                sessionId: id,
+                serverUrl: this.serverUrl
             });
         }).catch(err => {
-            webviewView.webview.postMessage({ 
-                type: 'error', 
-                value: `Failed to connect to Hermes Server: ${err.message}` 
+            webviewView.webview.postMessage({
+                type: 'error',
+                value: `Failed to connect to Hermes Server: ${err.message}`
             });
         });
 
@@ -103,8 +124,8 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         });
                         if (!response.ok) {
                             const errData = await response.json() as any;
-                            webviewView.webview.postMessage({ 
-                                type: 'error', 
+                            webviewView.webview.postMessage({
+                                type: 'error',
                                 value: errData.error || 'Failed to start agent.',
                                 status: response.status
                             });
@@ -145,15 +166,15 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
         if (!this.webviewView) return;
         this.startSession().then(id => {
             this.sessionId = id;
-            this.webviewView?.webview.postMessage({ 
-                type: 'init', 
-                sessionId: id, 
-                serverUrl: this.serverUrl 
+            this.webviewView?.webview.postMessage({
+                type: 'init',
+                sessionId: id,
+                serverUrl: this.serverUrl
             });
         }).catch(err => {
-            this.webviewView?.webview.postMessage({ 
-                type: 'error', 
-                value: `Failed to reconnect: ${err.message}` 
+            this.webviewView?.webview.postMessage({
+                type: 'error',
+                value: `Failed to reconnect: ${err.message}`
             });
         });
     }
@@ -174,6 +195,33 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
     private _getHtmlForWebview(): string {
         const htmlPath = path.join(this._extensionUri.fsPath, 'media', 'webview.html');
-        return fs.readFileSync(htmlPath, 'utf8');
+        try {
+            if (fs.existsSync(htmlPath)) {
+                return fs.readFileSync(htmlPath, 'utf8');
+            }
+        } catch (e) {
+            console.error('[Hermes] Failed to load webview.html:', e);
+        }
+        // Fallback HTML if file not found
+        return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+  <title>Hermes Chat</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; color: #ccc; background: #1e1e1e; }
+    h3 { color: #fff; }
+    .info { color: #4ec9b0; }
+    code { background: #2d2d2d; padding: 2px 6px; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <h3>Hermes Agent Bridge</h3>
+  <p class="info">⚠️ webview.html not found. Extension may be corrupted.</p>
+  <p>Expected path: <code>media/webview.html</code></p>
+  <p>Please reinstall the extension.</p>
+</body>
+</html>`;
     }
 }
