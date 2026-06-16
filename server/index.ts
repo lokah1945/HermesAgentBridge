@@ -565,7 +565,7 @@ app.get('/health', async (req, res) => {
   };
 
   try {
-    const r = await fetch(`${llmBaseUrl.replace('/v1','')}/api/tags`);
+    const r = await fetch(`${llmBaseUrl.replace('/v1','')}/api/tags`, { signal: AbortSignal.timeout(2000) });
     status.llm.status = r.ok ? 'ok' : 'degraded';
   } catch {
     status.llm.status = 'unavailable';
