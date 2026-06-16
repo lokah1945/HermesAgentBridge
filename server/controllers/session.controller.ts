@@ -35,7 +35,8 @@ export class SessionController {
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
-    sseService.register(sessionId, res);
+    const lastEventId = (req.headers['last-event-id'] || req.query.lastEventId) as string | undefined;
+    sseService.register(sessionId, res, lastEventId);
 
     // If session has a pending step when connecting, emit awaiting_approval immediately
     const session = getSession(sessionId);
