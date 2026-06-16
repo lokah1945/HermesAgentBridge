@@ -7,6 +7,10 @@ import { executeCommand } from '../../tools/terminal';
 import { searchWorkspace } from '../../tools/search';
 import { writeFile } from '../../tools/filesystem';
 import { logger } from '../../shared/logger';
+import fs from 'fs';
+import path from 'path';
+
+const EXECUTIONS_FILE = path.join(process.cwd(), 'data', 'executions.json');
 
 export interface ActiveExecution {
   resolve: (action: 'approve' | 'reject') => void;
@@ -15,6 +19,40 @@ export interface ActiveExecution {
 
 class AgentService {
   public activeExecutions: Record<string, ActiveExecution> = {};
+
+  constructor() {
+    this.loadExecutions();
+  }
+
+  private loadExecutions(): void {
+    try {
+      if (fs.existsSync(EXECUTIONS_FILE)) {
+        const data = fs.readFileSync(EXECUTIONS_FILE, 'utf8');
+        const parsed = JSON.parse(data);
+        this.activeExecutions = parsed;
+        logger.info(`[Agent Service] Loaded ${Object.keys(parsed).length} persisted executions`);
+      }
+    } catch (e) {
+      logger.warn('[Agent Service] Failed to load executions file');
+    }
+  }
+
+  private saveExecutions(): void {
+    try {
+      const dir = path.dirname(EXECUTIONS_FILE);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const serializable: Record<string, any> = {};
+      for (const [key, value] of Object.entries(this.activeExecutions)) {
+        serializable[key] = { pendingStep: value.pendingStep };
+      }
+      fs.writeFileSync(EXECUTIONS_FILE, JSON.stringify(serializable, null, 2));
+      logger.debug(`[Agent Service] Saved ${Object.keys(serializable).length} executions to file`);
+    } catch (e) {
+      logger.warn('[Agent Service] Failed to save executions file');
+    }
+  }
 
   public async handleStepFailure(
     sessionId: string,
@@ -158,10 +196,12 @@ class AgentService {
               resolve,
               pendingStep: step
             };
+            this.saveExecutions();
           });
 
           const action = await approvalPromise;
           delete this.activeExecutions[sessionId];
+          this.saveExecutions();
 
           const updatedSession = getSession(sessionId);
           if (!updatedSession) return;

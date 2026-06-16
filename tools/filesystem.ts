@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { createTwoFilesPatch } from 'diff';
 
+const MAX_FILE_SIZE = 1 * 1024 * 1024; // 1MB
+
 export function securePath(workspaceRoot: string, targetPath: string): { success: boolean; path?: string; error?: string } {
   try {
     const resolvedRoot = path.resolve(workspaceRoot);
@@ -12,6 +14,10 @@ export function securePath(workspaceRoot: string, targetPath: string): { success
     const relative = path.relative(resolvedRoot, absoluteTarget);
     if (relative.startsWith('..') || path.isAbsolute(relative)) {
       return { success: false, error: 'Access denied: Path outside workspace.' };
+    }
+
+    if (targetPath.includes('\0')) {
+      return { success: false, error: 'Invalid path: null bytes detected.' };
     }
 
     if (fs.existsSync(absoluteTarget)) {
@@ -38,6 +44,10 @@ export function readFile(workspaceRoot: string, targetPath: string): { success: 
   }
 
   try {
+    const stats = fs.statSync(securityCheck.path);
+    if (stats.size > MAX_FILE_SIZE) {
+      return { success: false, error: `File too large (${stats.size} bytes). Max allowed: ${MAX_FILE_SIZE} bytes. Use search tool instead.` };
+    }
     const content = fs.readFileSync(securityCheck.path, 'utf8');
     return { success: true, content };
   } catch (e: any) {

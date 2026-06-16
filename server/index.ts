@@ -1,9 +1,9 @@
 import express from 'express';
-import cors from 'cors';
 import { config } from '../shared/config';
 import { logger } from '../shared/logger';
 import requestLogger from './middleware/requestLogger';
 import errorHandler from './middleware/errorHandler';
+import { rateLimit, securityHeaders, corsHardening } from './middleware/security';
 
 import sessionRouter from './routes/session';
 import chatRouter from './routes/chat';
@@ -14,7 +14,9 @@ import healthRouter from './routes/health';
 
 const app = express();
 
-app.use(cors());
+app.use(securityHeaders);
+app.use(corsHardening);
+app.use(rateLimit);
 app.use(express.json());
 app.use(requestLogger);
 
