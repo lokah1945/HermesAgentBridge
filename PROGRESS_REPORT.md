@@ -21,12 +21,13 @@
 | 2026-06-17 | FEATURE | Add onView activation, openSidebar command, keybinding Ctrl+Shift+H | extensions/vscode/package.json | DONE | e0806af |
 | 2026-06-17 | FEATURE | Add custom config: host, port, url, apiKey, profile + webview fallback | extensions/vscode/src/extension.ts | DONE | bf5d03b |
 | 2026-06-17 | FEATURE | Display server URL in webview header | extensions/vscode/media/webview.html | DONE | 20dbc30 |
+| 2026-06-17 | BUGFIX | Change default server to 172.16.102.11:3000 (host, url, fallback) | package.json, extension.ts | DONE | aa26c4b |
 
 ## Notes
 - Task 5: Fixed Zod v4 API difference — used `.issues` instead of `.errors` on ZodError.
 - Task 6: Used `@vscode/vsce` scoped package (maintained replacement for deprecated `vsce`).
 - icon.svg: `fill="currentColor"` wajib agar icon muncul di VSCode activity bar (dark/light theme adaptive).
-- Config `hermes.serverUrl` hanya dipakai jika berbeda dari default; priority: serverUrl > host+port.
+- Config `hermes.serverUrl` default diatur ke `http://172.16.102.11:3000` dengan prioritas: serverUrl > host+port.
 - Keybinding: `Ctrl+Shift+H` (Windows/Linux) dan `Cmd+Shift+H` (macOS) untuk membuka sidebar langsung.
 
 ## Final Status: ALL TASKS COMPLETE ✅
