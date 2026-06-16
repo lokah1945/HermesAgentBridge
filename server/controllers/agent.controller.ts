@@ -65,7 +65,8 @@ export class AgentController {
   }
 
   public approveStep(req: Request, res: Response): void {
-    const { sessionId, stepId } = req.params;
+    const sessionId = req.params.sessionId as string;
+    const stepId = req.params.stepId as string;
     const execution = agentService.activeExecutions[sessionId];
 
     if (execution && execution.pendingStep?.id === stepId) {
@@ -95,7 +96,8 @@ export class AgentController {
   }
 
   public rejectStep(req: Request, res: Response): void {
-    const { sessionId, stepId } = req.params;
+    const sessionId = req.params.sessionId as string;
+    const stepId = req.params.stepId as string;
     const execution = agentService.activeExecutions[sessionId];
 
     if (execution && execution.pendingStep?.id === stepId) {
