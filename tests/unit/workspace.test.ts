@@ -44,7 +44,7 @@ describe('Workspace Utilities', () => {
 
     // Run with depth limit of 2
     const tree = generateFileTree(tempDir, 2);
-    expect(tree).toContain('├── folder1/');
+    expect(tree).toContain('└── folder1/');
     expect(tree).toContain('└── nested1/');
     expect(tree).not.toContain('nested2/');
     expect(tree).not.toContain('deep.txt');
