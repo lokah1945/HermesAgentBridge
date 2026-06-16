@@ -9,7 +9,10 @@
     "start": "node dist/server/index.js",
     "start:dev": "npm run dev",
     "start:prod": "npm run build && npm run start",
-    "health": "curl -s http://localhost:3000/health | cat"
+    "health": "curl -s http://localhost:3000/health | cat",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
