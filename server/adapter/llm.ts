@@ -53,7 +53,7 @@ export async function chat(messages: LLMMessage[]): Promise<string> {
         return responseContent;
     } catch (err: any) {
         console.error("[LLM Chat Error]", err);
-        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED') {
+        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED' || err.name === 'APIConnectionError' || err.name === 'ConnectionError' || err.message?.includes('Connection error')) {
             throw new Error('LLM_UNAVAILABLE: Ollama tidak berjalan di ' + llmConfig.baseUrl);
         }
         if (err.status === 404) {
@@ -82,7 +82,7 @@ export async function chatStream(options: LLMStreamOptions): Promise<void> {
     } catch (err: any) {
         console.error("[LLM ChatStream Error]", err);
         let errorToReport = err;
-        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED') {
+        if (err.code === 'ECONNREFUSED' || err.message?.includes('fetch failed') || err.cause?.code === 'ECONNREFUSED' || err.name === 'APIConnectionError' || err.name === 'ConnectionError' || err.message?.includes('Connection error')) {
             errorToReport = new Error('LLM_UNAVAILABLE: Ollama tidak berjalan di ' + llmConfig.baseUrl);
         } else if (err.status === 404) {
             errorToReport = new Error('LLM_MODEL_NOT_FOUND: Model ' + llmConfig.model + ' belum di-pull di Ollama');

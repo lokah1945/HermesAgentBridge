@@ -1,5 +1,6 @@
 import { chat, LLMMessage } from '../server/adapter/llm';
 import { WorkspaceContext, AgentPlan } from '../shared/types/agent';
+import { generateFileTree } from '../tools/workspace';
 
 const PLANNER_SYSTEM_PROMPT = `You are ILMA, a coding agent embedded in the Hermes platform.
 You receive a user task and workspace context.
@@ -31,12 +32,20 @@ export async function createPlan(
   workspaceContext: WorkspaceContext,
   sessionId: string
 ): Promise<AgentPlan> {
+  const rootDir = workspaceContext.root;
+  const fileTree = generateFileTree(rootDir);
+
+  const customSystemPrompt = `${PLANNER_SYSTEM_PROMPT}
+
+Here is the current directory tree of the workspace:
+${fileTree}`;
+
   const userPrompt = `Task: ${task}
 Workspace Context:
 ${JSON.stringify(workspaceContext, null, 2)}`;
 
   const messages: LLMMessage[] = [
-    { role: 'system', content: PLANNER_SYSTEM_PROMPT },
+    { role: 'system', content: customSystemPrompt },
     { role: 'user', content: userPrompt }
   ];
 
@@ -90,3 +99,72 @@ ${JSON.stringify(workspaceContext, null, 2)}`;
 
   throw new Error('Failed to generate a valid plan.');
 }
+
+export async function revisePlanForError(
+  failedStep: any,
+  errorMessage: string,
+  workspaceContext: WorkspaceContext,
+  conversationHistory: LLMMessage[]
+): Promise<AgentPlan> {
+  const rootDir = workspaceContext.root;
+  const fileTree = generateFileTree(rootDir);
+
+  const customSystemPrompt = `${PLANNER_SYSTEM_PROMPT}
+
+Here is the current directory tree of the workspace:
+${fileTree}`;
+
+  const userPrompt = `A previous step failed during execution.
+Failed Step: ${JSON.stringify(failedStep, null, 2)}
+Error: ${errorMessage}
+
+Analyze the error and provide a corrected step or a new set of steps to fix this error and complete the goal.
+Response MUST be valid JSON conforming to the AgentPlan schema.`;
+
+  const messages: LLMMessage[] = [
+    { role: 'system', content: customSystemPrompt },
+    ...conversationHistory,
+    { role: 'user', content: userPrompt }
+  ];
+
+  let attempts = 2;
+  while (attempts > 0) {
+    try {
+      const response = await chat(messages);
+      let cleanResponse = response.trim();
+      if (cleanResponse.startsWith('```json')) {
+        cleanResponse = cleanResponse.substring(7);
+      } else if (cleanResponse.startsWith('```')) {
+        cleanResponse = cleanResponse.substring(3);
+      }
+      if (cleanResponse.endsWith('```')) {
+        cleanResponse = cleanResponse.substring(0, cleanResponse.length - 3);
+      }
+      cleanResponse = cleanResponse.trim();
+
+      const parsedPlan: AgentPlan = JSON.parse(cleanResponse);
+      if (!parsedPlan.goal || !Array.isArray(parsedPlan.steps)) {
+        throw new Error('Parsed object does not conform to AgentPlan schema.');
+      }
+
+      parsedPlan.steps = parsedPlan.steps.map(step => {
+        let mode = step.mode;
+        if (step.action === 'read_file' || step.action === 'search') {
+          mode = 'auto';
+        } else if (step.action === 'write_file' || step.action === 'run_command') {
+          mode = 'review';
+        }
+        return { ...step, mode };
+      });
+
+      return parsedPlan;
+    } catch (e: any) {
+      attempts--;
+      if (attempts === 0) {
+        throw new Error(`Failed to generate a revised plan JSON: ${e.message}`);
+      }
+    }
+  }
+  throw new Error('Failed to generate a revised plan.');
+}
+

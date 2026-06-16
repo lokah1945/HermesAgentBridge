@@ -5,9 +5,9 @@ import fs from 'fs';
 import path from 'path';
 import { readFile, writeFile } from '../tools/filesystem';
 import { executeCommand } from '../tools/terminal';
-import { gitStatus, gitCommit } from '../tools/git';
+import { gitStatus, gitCommit, gitDiff } from '../tools/git';
 import { searchWorkspace } from '../tools/search';
-import { createPlan } from '../runtime/planner';
+import { createPlan, revisePlanForError } from '../runtime/planner';
 import { executeStep } from '../runtime/executor';
 import { chat, chatStream } from './adapter/llm';
 import { saveSession, getSession, deleteSession } from './session-store';
@@ -130,6 +130,43 @@ app.post('/v1/chat/completions', async (req, res) => {
     }
 });
 
+async function handleStepFailure(sessionId: string, failedStep: any, errorMsg: string, context: any): Promise<boolean> {
+    const session = getSession(sessionId);
+    if (!session) return false;
+    
+    session.retryCount = session.retryCount || 0;
+    if (session.retryCount >= 2) {
+        sendSSE(sessionId, 'error', { error: `Max retries reached. Original error: ${errorMsg}` });
+        return false;
+    }
+    
+    session.retryCount++;
+    sendSSE(sessionId, 'info', { message: `Step ${failedStep.id} failed. Retrying (Attempt ${session.retryCount}/2) via Self-Correction Loop...` });
+    
+    try {
+        const revisedPlan = await revisePlanForError(failedStep, errorMsg, context, session.history);
+        const currentIdx = session.currentStepIndex || 0;
+        const remainingSteps = session.plan.steps.slice(currentIdx + 1);
+        
+        session.plan.steps = [
+            ...session.plan.steps.slice(0, currentIdx),
+            ...revisedPlan.steps,
+            ...remainingSteps
+        ];
+        
+        session.currentStepIndex = currentIdx;
+        session.pendingStep = undefined;
+        saveSession(sessionId, session);
+        
+        sendSSE(sessionId, 'plan', session.plan);
+        runAgentLoop(sessionId);
+        return true;
+    } catch (e: any) {
+        sendSSE(sessionId, 'error', { error: `Self-correction failed: ${e.message}` });
+        return false;
+    }
+}
+
 async function runAgentLoop(sessionId: string) {
     const session = getSession(sessionId);
     if (!session || !session.plan || session.currentStepIndex === undefined) {
@@ -138,12 +175,14 @@ async function runAgentLoop(sessionId: string) {
 
     const workspaceRoot = session.workspace?.root || session.workspace || process.cwd();
     const gitStatusRes = await gitStatus(workspaceRoot);
+    const gitDiffRes = await gitDiff(workspaceRoot);
     const context = {
         root: workspaceRoot,
         files: [],
         symbols: [],
         dependencies: { imports: [], exports: [] },
-        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
+        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status",
+        git_diff: gitDiffRes.success ? gitDiffRes.output : "Error fetching git diff"
     };
 
     const steps = session.plan.steps;
@@ -172,14 +211,20 @@ async function runAgentLoop(sessionId: string) {
                     currentSession.history.push({ role: 'assistant', content: result.output || "Success" });
                     saveSession(sessionId, currentSession);
                 } else {
-                    sendSSE(sessionId, 'error', { error: result.error || "Step execution failed" });
+                    const errorMsg = result.error || "Step execution failed";
+                    const handled = await handleStepFailure(sessionId, step, errorMsg, context);
+                    if (handled) return;
+                    sendSSE(sessionId, 'error', { error: errorMsg });
                     return;
                 }
             } else {
                 // Review mode
                 const result = await executeStep(step, context, currentSession.history);
                 if (result.status === 'error') {
-                    sendSSE(sessionId, 'error', { error: result.error || "Step preparation failed" });
+                    const errorMsg = result.error || "Step preparation failed";
+                    const handled = await handleStepFailure(sessionId, step, errorMsg, context);
+                    if (handled) return;
+                    sendSSE(sessionId, 'error', { error: errorMsg });
                     return;
                 }
 
@@ -200,7 +245,8 @@ async function runAgentLoop(sessionId: string) {
                     sendSSE(sessionId, 'diff', {
                         stepId: step.id,
                         file: step.target,
-                        unified: `Command to execute: ${step.target}`
+                        unified: `Command to execute: ${step.target}`,
+                        action: 'run_command'
                     });
                     currentSession.pendingStep = {
                         stepId: step.id,
@@ -211,7 +257,7 @@ async function runAgentLoop(sessionId: string) {
                     saveSession(sessionId, currentSession);
                 }
 
-                sendSSE(sessionId, 'awaiting_approval', { session_id: sessionId, step_id: step.id });
+                sendSSE(sessionId, 'awaiting_approval', { session_id: sessionId, step_id: step.id, action: step.action });
 
                 const approvalPromise = new Promise<'approve' | 'reject'>((resolve) => {
                     activeExecutions[sessionId] = {
@@ -233,7 +279,10 @@ async function runAgentLoop(sessionId: string) {
                             modifiedFiles.push(result.diff.file);
                             sendSSE(sessionId, 'applied', { file: step.target, stepId: step.id });
                         } else {
-                            sendSSE(sessionId, 'error', { error: writeRes.error || "Failed to write file" });
+                            const errorMsg = writeRes.error || "Failed to write file";
+                            const handled = await handleStepFailure(sessionId, step, errorMsg, context);
+                            if (handled) return;
+                            sendSSE(sessionId, 'error', { error: errorMsg });
                             return;
                         }
                     } else if (step.action === 'run_command') {
@@ -241,7 +290,10 @@ async function runAgentLoop(sessionId: string) {
                         if (execResult.success) {
                             sendSSE(sessionId, 'result', { stepId: step.id, status: 'success', output: execResult.output });
                         } else {
-                            sendSSE(sessionId, 'error', { error: execResult.output || "Failed to execute command" });
+                            const errorMsg = execResult.output || "Failed to execute command";
+                            const handled = await handleStepFailure(sessionId, step, errorMsg, context);
+                            if (handled) return;
+                            sendSSE(sessionId, 'error', { error: errorMsg });
                             return;
                         }
                     } else {
@@ -259,6 +311,8 @@ async function runAgentLoop(sessionId: string) {
             }
         } catch (e: any) {
             console.error(`[Agent Loop Error] sessionId: ${sessionId}`, e);
+            const handled = await handleStepFailure(sessionId, step, e.message || "Failed during step execution", context);
+            if (handled) return;
             sendSSE(sessionId, 'error', { error: e.message || "Failed during step execution" });
             return;
         }
@@ -267,6 +321,7 @@ async function runAgentLoop(sessionId: string) {
     const finalSession = getSession(sessionId);
     if (finalSession) {
         finalSession.currentStepIndex = steps.length;
+        finalSession.retryCount = 0;
         saveSession(sessionId, finalSession);
     }
     sendSSE(sessionId, 'done', { summary: "Task completed", files_modified: modifiedFiles });
@@ -294,12 +349,14 @@ app.post('/v1/agent/run', requireFields('session_id', 'task', 'workspace'), asyn
     saveSession(session_id, session);
 
     const gitStatusRes = await gitStatus(workspaceRoot);
+    const gitDiffRes = await gitDiff(workspaceRoot);
     const context = {
         root: workspaceRoot,
         files: [],
         symbols: [],
         dependencies: { imports: [], exports: [] },
-        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status"
+        git_status: gitStatusRes.success ? gitStatusRes.output : "Error fetching git status",
+        git_diff: gitDiffRes.success ? gitDiffRes.output : "Error fetching git diff"
     };
 
     try {

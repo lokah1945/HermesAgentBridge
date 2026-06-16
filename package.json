@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --exec ts-node server/index.ts",
+    "dev": "nodemon --ignore data/ --exec ts-node server/index.ts",
     "build": "tsc --outDir dist --rootDir . --declaration false",
     "start": "node dist/server/index.js",
     "start:dev": "npm run dev",
@@ -19,6 +19,7 @@
     "cors": "^2.8.6",
     "diff": "^9.0.0",
     "express": "^5.2.1",
+    "ignore": "^7.0.5",
     "openai": "^6.42.0",
     "uuid": "^14.0.0"
   },

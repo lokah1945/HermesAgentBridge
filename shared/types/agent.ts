@@ -4,6 +4,7 @@ export interface WorkspaceContext {
     symbols?: string[];
     dependencies?: { imports: string[]; exports: string[] };
     git_status?: string;
+    git_diff?: string;
 }
 
 export interface AgentStep {

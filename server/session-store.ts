@@ -32,6 +32,11 @@ export function loadSessions(): SessionStore {
 
 export function saveSession(id: string, data: any): void {
   const store = loadSessions();
+  if (data && Array.isArray(data.history)) {
+    if (data.history.length > 10) {
+      data.history = data.history.slice(-10);
+    }
+  }
   store[id] = { ...data, updatedAt: Date.now() };
   fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
 }

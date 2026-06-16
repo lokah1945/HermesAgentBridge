@@ -103,7 +103,8 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                             const errData = await response.json() as any;
                             webviewView.webview.postMessage({ 
                                 type: 'error', 
-                                value: errData.error || 'Failed to start agent.' 
+                                value: errData.error || 'Failed to start agent.',
+                                status: response.status
                             });
                         }
                     } catch (err: any) {
@@ -129,6 +130,10 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                     } catch (err: any) {
                         webviewView.webview.postMessage({ type: 'error', value: `Reject failed: ${err.message}` });
                     }
+                    break;
+
+                case 'restartSession':
+                    this.restartSession();
                     break;
             }
         });
@@ -405,6 +410,149 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         padding: 0;
                         flex: none;
                     }
+
+                    /* Overlay for Server 503 / Ollama down error */
+                    .overlay {
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background: rgba(15, 15, 20, 0.95);
+                        backdrop-filter: blur(8px);
+                        display: flex;
+                        flex-direction: column;
+                        align-items: center;
+                        justify-content: center;
+                        z-index: 1000;
+                        padding: 24px;
+                        text-align: center;
+                        color: #f3f4f6;
+                        animation: fadeIn 0.3s ease;
+                    }
+
+                    @keyframes fadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+
+                    .overlay-icon {
+                        font-size: 48px;
+                        margin-bottom: 16px;
+                        animation: bounce 2s infinite;
+                    }
+
+                    @keyframes bounce {
+                        0%, 100% { transform: translateY(0); }
+                        50% { transform: translateY(-8px); }
+                    }
+
+                    .overlay-title {
+                        font-size: 16px;
+                        font-weight: bold;
+                        color: #ef4444;
+                        margin-bottom: 8px;
+                    }
+
+                    .overlay-desc {
+                        font-size: 13px;
+                        color: #9ca3af;
+                        margin-bottom: 20px;
+                        line-height: 1.5;
+                    }
+
+                    .overlay-code {
+                        background: #27272a;
+                        border: 1px solid #3f3f46;
+                        padding: 8px 12px;
+                        border-radius: 4px;
+                        font-family: monospace;
+                        font-size: 12px;
+                        color: #a7f3d0;
+                        margin-bottom: 24px;
+                    }
+
+                    .overlay-btn {
+                        background: #ef4444;
+                        color: white;
+                        border: none;
+                        padding: 8px 16px;
+                        border-radius: 4px;
+                        font-weight: bold;
+                        cursor: pointer;
+                        font-size: 12px;
+                        transition: background 0.2s;
+                        width: auto;
+                        flex: none;
+                    }
+
+                    .overlay-btn:hover {
+                        background: #dc2626;
+                    }
+
+                    /* Terminal Block CSS */
+                    .terminal-container {
+                        margin-top: 8px;
+                        border: 1px solid var(--border);
+                        border-radius: 6px;
+                        background: #1e1e1e;
+                        overflow: hidden;
+                    }
+                    .terminal-header {
+                        padding: 6px 10px;
+                        background: #333;
+                        color: #ccc;
+                        font-size: 11px;
+                        font-weight: bold;
+                        display: flex;
+                        align-items: center;
+                        gap: 6px;
+                    }
+                    .terminal-body {
+                        padding: 10px;
+                        font-family: var(--vscode-editor-font-family, monospace);
+                        font-size: 12px;
+                        color: #f8f8f2;
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                    }
+                    .terminal-prompt {
+                        color: #50fa7b;
+                        font-weight: bold;
+                    }
+                    .terminal-cmd {
+                        font-weight: 500;
+                        white-space: pre-wrap;
+                        word-break: break-all;
+                    }
+
+                    /* Terminal Output styling */
+                    .terminal-output-container {
+                        margin-top: 8px;
+                        border: 1px solid var(--border);
+                        border-radius: 6px;
+                        background: #181818;
+                        overflow: hidden;
+                    }
+                    .terminal-output-header {
+                        padding: 4px 8px;
+                        background: #252526;
+                        color: #858585;
+                        font-size: 10px;
+                        font-weight: bold;
+                        border-bottom: 1px solid var(--border);
+                    }
+                    .terminal-output-body {
+                        padding: 8px;
+                        margin: 0;
+                        font-family: var(--vscode-editor-font-family, monospace);
+                        font-size: 11px;
+                        color: #d4d4d4;
+                        white-space: pre-wrap;
+                        max-height: 200px;
+                        overflow-y: auto;
+                    }
                 </style>
             </head>
             <body>
@@ -430,6 +578,15 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                     <button class="send-btn" id="sendBtn">▶</button>
                 </div>
 
+                <!-- Ollama Down Overlay -->
+                <div id="errorOverlay" class="overlay" style="display: none;">
+                    <div class="overlay-icon">⚠️</div>
+                    <div class="overlay-title">Ollama is down</div>
+                    <div class="overlay-desc">Hermes cannot connect to the Local LLM engine. Please make sure Ollama is running.</div>
+                    <div class="overlay-code">ollama serve</div>
+                    <button class="overlay-btn" onclick="retryConnection()">Dismiss</button>
+                </div>
+
                 <script>
                     const vscode = acquireVsCodeApi();
                     let sessionId = null;
@@ -447,6 +604,16 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                     function setStatus(status, labelText) {
                         statusDot.className = 'status-dot ' + status;
                         statusLabel.textContent = labelText || status.charAt(0).toUpperCase() + status.slice(1);
+                    }
+
+                    function showOllamaDownOverlay() {
+                        document.getElementById('errorOverlay').style.display = 'flex';
+                        setStatus('error', 'Ollama Offline');
+                    }
+
+                    function retryConnection() {
+                        document.getElementById('errorOverlay').style.display = 'none';
+                        vscode.postMessage({ type: 'restartSession' });
                     }
 
                     function connectSSE(sid) {
@@ -476,12 +643,16 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
                         eventSource.addEventListener('diff', e => {
                             const diff = JSON.parse(e.data);
-                            renderDiff(diff);
+                            if (diff.action === 'run_command') {
+                                renderTerminalBlock(diff);
+                            } else {
+                                renderDiff(diff);
+                            }
                         });
 
                         eventSource.addEventListener('awaiting_approval', e => {
                             const data = JSON.parse(e.data);
-                            showApprovalButtons(data.step_id);
+                            showApprovalButtons(data.step_id, data.action);
                             setStatus('awaiting', 'Awaiting Approval');
                         });
 
@@ -504,8 +675,12 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
                         eventSource.addEventListener('error', e => {
                             const data = JSON.parse(e.data);
-                            showError(data.error);
-                            setStatus('error', 'Error occurred');
+                            if (data.error && (data.error.includes('LLM_UNAVAILABLE') || data.error.includes('Ollama tidak berjalan'))) {
+                                showOllamaDownOverlay();
+                            } else {
+                                showError(data.error);
+                                setStatus('error', 'Error occurred');
+                            }
                         });
 
                         eventSource.addEventListener('done', e => {
@@ -521,7 +696,11 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                             serverUrl = msg.serverUrl;
                             connectSSE(sessionId);
                         } else if (msg.type === 'error') {
-                            showError(msg.value);
+                            if (msg.status === 503 || msg.value.includes('LLM_UNAVAILABLE') || msg.value.includes('Ollama tidak berjalan')) {
+                                showOllamaDownOverlay();
+                            } else {
+                                showError(msg.value);
+                            }
                         }
                     });
 
@@ -586,6 +765,23 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         appendAgentMessage(html);
                     }
 
+                    function renderTerminalBlock(diff) {
+                        const html = \`
+                            <strong>Suggested Terminal Command:</strong>
+                            <div class="terminal-container">
+                                <div class="terminal-header">
+                                    <span class="step-icon">💻</span>
+                                    <span>Terminal Command</span>
+                                </div>
+                                <div class="terminal-body">
+                                    <span class="terminal-prompt">$</span>
+                                    <span class="terminal-cmd">\${escapeHtml(diff.file)}</span>
+                                </div>
+                            </div>
+                        \`;
+                        appendAgentMessage(html);
+                    }
+
                     function renderDiff(diff) {
                         const lines = diff.unified.split('\\n');
                         const lineHtml = lines.map(line => {
@@ -610,22 +806,22 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
                         appendAgentMessage(html);
                     }
 
-                    function showApprovalButtons(stepId) {
+                    function showApprovalButtons(stepId, action) {
                         const panel = document.createElement('div');
                         panel.className = 'action-panel';
                         panel.id = 'approval-panel-' + stepId;
                         
                         const applyBtn = document.createElement('button');
-                        applyBtn.textContent = 'Apply';
+                        applyBtn.textContent = action === 'run_command' ? 'Run Command' : 'Apply';
                         applyBtn.onclick = () => {
                             vscode.postMessage({ type: 'approveStep', stepId });
                             panel.remove();
-                            setStatus('executing', 'Writing file...');
+                            setStatus('executing', action === 'run_command' ? 'Executing command...' : 'Writing file...');
                         };
 
                         const rejectBtn = document.createElement('button');
                         rejectBtn.className = 'reject';
-                        rejectBtn.textContent = 'Reject';
+                        rejectBtn.textContent = action === 'run_command' ? 'Cancel' : 'Reject';
                         rejectBtn.onclick = () => {
                             vscode.postMessage({ type: 'rejectStep', stepId });
                             panel.remove();
@@ -654,8 +850,18 @@ class HermesChatViewProvider implements vscode.WebviewViewProvider {
 
                     function appendResult(res) {
                         markStepDone(res.stepId);
-                        const output = res.output ? \`<pre style="background: rgba(0,0,0,0.15); padding: 6px; border-radius: 4px; font-size:11px;">\${escapeHtml(res.output)}</pre>\` : 'Executed step successfully.';
-                        appendAgentMessage(\`<strong>Result step \${res.stepId}:</strong> \${output}\`);
+                        if (res.output) {
+                            const html = \`
+                                <strong>Result step \${res.stepId}:</strong>
+                                <div class="terminal-output-container">
+                                    <div class="terminal-output-header">Terminal Output</div>
+                                    <pre class="terminal-output-body">\${escapeHtml(res.output)}</pre>
+                                </div>
+                            \`;
+                            appendAgentMessage(html);
+                        } else {
+                            appendAgentMessage(\`<strong>Result step \${res.stepId}:</strong> Executed step successfully.\`);
+                        }
                     }
 
                     function showError(errText) {

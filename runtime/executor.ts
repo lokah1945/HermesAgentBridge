@@ -3,6 +3,7 @@ import { WorkspaceContext, AgentStep, ExecutionResult } from '../shared/types/ag
 import { readFile, writeFile, generateDiff } from '../tools/filesystem';
 import { executeCommand } from '../tools/terminal';
 import { searchWorkspace } from '../tools/search';
+import { truncateToLimit } from '../shared/utils/tokenizer';
 
 
 const CODE_GEN_SYSTEM_PROMPT = `You are ILMA, a coding agent. You are executing a specific file write step.
@@ -22,10 +23,18 @@ export async function executeStep(
       case 'read_file': {
         const result = readFile(root, step.target);
         if (result.success) {
+          const content = result.content || "";
+          if (content.length > 50000) {
+            return {
+              stepId: step.id,
+              status: 'error',
+              error: `File too large (${(content.length / 1024).toFixed(1)}KB), please use search tool.`
+            };
+          }
           return {
             stepId: step.id,
             status: 'success',
-            output: result.content
+            output: content
           };
         } else {
           return {
@@ -54,19 +63,27 @@ export async function executeStep(
       }
 
       case 'run_command': {
-        const result = await executeCommand(root, step.target);
-        if (result.success) {
+        if (step.mode === 'review') {
           return {
             stepId: step.id,
-            status: 'success',
-            output: result.output
+            status: 'pending_approval',
+            output: `Command to execute: ${step.target}`
           };
         } else {
-          return {
-            stepId: step.id,
-            status: 'error',
-            error: result.output
-          };
+          const result = await executeCommand(root, step.target);
+          if (result.success) {
+            return {
+              stepId: step.id,
+              status: 'success',
+              output: result.output
+            };
+          } else {
+            return {
+              stepId: step.id,
+              status: 'error',
+              error: result.output
+            };
+          }
         }
       }
 

@@ -10,3 +10,11 @@ export async function gitCommit(workspaceRoot: string, message: string): Promise
     if (!addResult.success) return addResult;
     return await executeCommand(workspaceRoot, `git commit -m "${message.replace(/"/g, '\\"')}"`);
 }
+
+export async function gitDiff(workspaceRoot: string): Promise<any> {
+    const result = await executeCommand(workspaceRoot, 'git diff');
+    if (result.success && result.output.length > 2000) {
+        result.output = result.output.substring(0, 2000) + '\n\n... [Git diff truncated to 2000 characters]';
+    }
+    return result;
+}
